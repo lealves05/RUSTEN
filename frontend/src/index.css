@@ -1,0 +1,57 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Tokens RUSTEN — claro (padrão) e escuro */
+:root {
+  --bg: 246 240 227;       /* creme claro */
+  --surface: 255 252 245;
+  --raised: 238 229 210;
+  --ink: 32 32 32;         /* grafite */
+  --muted: 104 96 86;
+  --line: 214 201 176;
+  --copper: 150 88 36;     /* cobre escurecido para contraste no claro */
+  --rust: 155 52 52;       /* vermelho queimado */
+  --ok: 46 110 70;
+  --warn: 160 110 20;
+  color-scheme: light;
+}
+.dark {
+  --bg: 18 18 18;          /* preto */
+  --surface: 32 32 32;     /* grafite */
+  --raised: 44 42 40;
+  --ink: 243 233 210;      /* creme */
+  --muted: 176 164 142;
+  --line: 64 60 56;
+  --copper: 196 128 64;    /* cobre */
+  --rust: 196 84 84;
+  --ok: 110 180 130;
+  --warn: 220 170 70;
+  color-scheme: dark;
+}
+html, body, #root { min-height: 100%; }
+body { font-family: Inter, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+.compact { font-size: 14px; }
+
+@layer components {
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 font-semibold transition
+    focus:outline-none focus-visible:ring-4 focus-visible:ring-copper/40 disabled:opacity-50 disabled:cursor-not-allowed; }
+  .btn-primary { @apply btn bg-copper text-white hover:brightness-110 dark:text-black; }
+  .btn-danger { @apply btn bg-rust text-white hover:brightness-110; }
+  .btn-ghost { @apply btn border border-line bg-surface hover:bg-raised; }
+  .btn-xl { @apply min-h-[56px] px-6 text-lg; }
+  .input { @apply w-full rounded-lg border border-line bg-surface px-3 py-2 text-ink placeholder:text-muted/70
+    focus:outline-none focus:ring-4 focus:ring-copper/30 focus:border-copper; }
+  .label { @apply mb-1 block text-sm font-medium text-muted; }
+  .card { @apply rounded-xl border border-line bg-surface; }
+  .title { @apply font-display text-3xl tracking-wide; }
+  .chip { @apply inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold; }
+  .table-clean { @apply w-full text-sm; }
+  .table-clean th { @apply border-b border-line px-3 py-2 text-left font-semibold text-muted; }
+  .table-clean td { @apply border-b border-line/60 px-3 py-2 align-top; }
+  .stripe { background-image: repeating-linear-gradient(135deg, rgb(var(--copper) / .12) 0 10px, transparent 10px 20px); }
+}
+@media print {
+  .no-print { display: none !important; }
+  body { background: #fff; color: #000; }
+}

@@ -1,0 +1,27 @@
+# Blueprint do Render para a API do RUSTEN (mesmo arranjo do ORBI: API no Render, site na Vercel, banco no Supabase)
+services:
+  - type: web
+    name: rusten-api
+    runtime: node
+    rootDir: backend
+    plan: starter
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL        # connection string do Supabase (pooler, modo session)
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS        # ex.: https://rusten.vercel.app
+        sync: false
+      - key: PLATFORM_HUB_URL    # endereço da API do ORBI (central/MASTER)
+        sync: false
+      - key: PLATFORM_SECRET     # segredo exibido ao cadastrar o sistema no MASTER do ORBI
+        sync: false
+      - key: CRON_SECRET
+        generateValue: true
+      - key: ALLOW_SIGNUP
+        value: "true"

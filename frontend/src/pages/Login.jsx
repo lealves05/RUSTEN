@@ -1,0 +1,55 @@
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { api, tokens } from '../lib/api.js';
+import { useSession } from '../lib/session.jsx';
+import { ErrorBox, Field, Logo } from '../components/ui.jsx';
+
+export function AuthShell({ children, title, subtitle }) {
+  return (
+    <div className="grid min-h-screen lg:grid-cols-[1.1fr_1fr]">
+      <div className="relative hidden overflow-hidden bg-[#121212] p-10 text-[#F3E9D2] lg:flex lg:flex-col lg:justify-between">
+        <div className="absolute inset-0 opacity-30" style={{ backgroundImage: 'repeating-linear-gradient(135deg,#B8733333 0 14px,transparent 14px 28px)' }} />
+        <div className="relative"><Logo size={48} /></div>
+        <div className="relative">
+          <div className="font-display text-7xl leading-[0.9] tracking-wide">Do balcão<br />à oficina,<br /><span className="text-[#B87333]">tudo no ponto.</span></div>
+          <p className="mt-6 max-w-md text-[#F3E9D2]/80">Comandas, mesas, leitor de códigos e caixa num só lugar — feito para o ritmo de bar e restaurante.</p>
+        </div>
+        <div className="relative flex gap-6 text-xs uppercase tracking-[0.3em] text-[#F3E9D2]/60"><span>Comanda</span><span>•</span><span>Produto</span><span>•</span><span>Caixa</span></div>
+      </div>
+      <div className="flex items-center justify-center p-5 sm:p-10">
+        <div className="w-full max-w-md">
+          <div className="mb-6 lg:hidden"><Logo /></div>
+          <h1 className="title text-4xl">{title}</h1>
+          {subtitle && <p className="mb-6 text-muted">{subtitle}</p>}
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function Login() {
+  const s = useSession();
+  const [f, setF] = useState({ email: '', password: '' });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const submit = async (e) => {
+    e.preventDefault(); setBusy(true); setErr(null);
+    try {
+      tokens.save(await api('/api/auth/login', { method: 'POST', body: f }));
+      await s.reload();
+    } catch (e2) { setErr(e2); } finally { setBusy(false); }
+  };
+  return (
+    <AuthShell title="Entrar" subtitle="Acesse o painel do seu estabelecimento.">
+      <form onSubmit={submit} className="space-y-4">
+        <Field label="E-mail"><input className="input" type="email" autoComplete="username" required value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>
+        <Field label="Senha"><input className="input" type="password" autoComplete="current-password" required value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></Field>
+        <ErrorBox error={err} />
+        <button className="btn-primary btn-xl w-full" disabled={busy}>{busy ? 'Entrando…' : 'Entrar'}</button>
+      </form>
+      <p className="mt-6 text-sm text-muted">Ainda não usa o RUSTEN? <Link className="font-semibold text-copper underline" to="/cadastro">Cadastre seu estabelecimento</Link></p>
+      <p className="mt-2 text-xs text-muted">Esqueceu a senha? Peça ao proprietário ou administrador da sua empresa para redefinir, ou fale com o suporte.</p>
+    </AuthShell>
+  );
+}

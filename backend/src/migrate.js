@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pool } from './lib/core.js';
+import { env } from './lib/env.js';
 
 const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'migrations');
 
@@ -34,6 +35,6 @@ export async function migrate({ log = console.log } = {}) {
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+if (!env.EDGE_RUNTIME && process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   migrate().then(() => pool.end()).catch((e) => { console.error(e.message); process.exit(1); });
 }

@@ -29,6 +29,18 @@ cd frontend && npm install && npm run dev   # http://localhost:5173 (proxy /api 
 
 Testes: `DATABASE_URL=postgres://…/rusten_test npm run smoke` (em `backend/`; **apaga** o banco informado — o nome precisa conter `test`).
 
+## No ar hoje
+
+- **API**: Supabase Edge Function `rusten-api` no projeto TORVEN (`dwfbxrfniarhufltmlhb`), tabelas no esquema **`rusten`**
+  (isolado; nada do TORVEN é tocado). Endereço: `https://dwfbxrfniarhufltmlhb.supabase.co/functions/v1/rusten-api`
+  (saúde: `/api/health`). O plano gratuito do Supabase só permite 2 projetos (ORBI e TORVEN), por isso o esquema separado.
+- Reimplantar: a função usa `backend/deno.json` (import map `npm:`) e entrada `src/edge.js`; ou gere um arquivo único com
+  `node scripts/build-edge.mjs` (sai em `backend/edge/index.js`). Variáveis: `SUPABASE_DB_URL` e `SUPABASE_SERVICE_ROLE_KEY`
+  já existem no Supabase; `JWT_SECRET` é opcional (se ausente, a chave é derivada do segredo de serviço).
+- Migrações novas: aplicar no esquema `rusten` (`set local search_path to rusten`) — no Edge não há leitura de arquivos no boot.
+- **Site**: `frontend/.env.production` já aponta para a API acima. Na pasta `frontend`: `npx vercel --prod`
+  (ou importe o repositório na Vercel com *Root Directory* `frontend`).
+
 ## Publicar (mesmo procedimento do ORBI)
 
 1. **GitHub**: crie o repositório `RUSTEN` e faça `git push` (o CI roda smoke, lint e build).

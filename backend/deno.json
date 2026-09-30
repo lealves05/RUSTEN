@@ -1,0 +1,11 @@
+{
+  "imports": {
+    "express": "npm:express@5.2.1",
+    "helmet": "npm:helmet@8.3.0",
+    "cors": "npm:cors@2.8.6",
+    "pg": "npm:pg@8.23.1",
+    "zod": "npm:zod@4.6.5",
+    "bcryptjs": "npm:bcryptjs@3.0.3",
+    "jsonwebtoken": "npm:jsonwebtoken@9.0.3"
+  }
+}

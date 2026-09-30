@@ -9,6 +9,7 @@ import { DEFAULT_ROLES, PERMISSIONS, MODULES } from '../lib/catalog.js';
 import { pdvSettings } from '../lib/pdv.js';
 import { seedCompany } from '../lib/seed.js';
 import { enqueueHub, hubConfigured, callHub } from '../lib/platform.js';
+import { env } from '../lib/env.js';
 
 export const router = Router();
 
@@ -48,7 +49,7 @@ const registerSchema = z.object({
 });
 
 router.post('/register', h(async (req, res) => {
-  if (process.env.ALLOW_SIGNUP === 'false') throw new HttpError(403, 'Novos cadastros estão temporariamente fechados', 'signup_closed');
+  if (env.ALLOW_SIGNUP === 'false') throw new HttpError(403, 'Novos cadastros estão temporariamente fechados', 'signup_closed');
   await rateLimit(`register:${req.ip}`, 10, 3600);
   const b = parse(registerSchema, req.body);
   checkPassword(b.owner.password);
@@ -90,7 +91,9 @@ async function startSession(user, req) {
   return { access_token: signAccess(user, sid), refresh_token: `${sid}.${refresh}` };
 }
 
-const DUMMY_HASH = bcrypt.hashSync('dummy-password-for-timing', 12);
+// Hash fictício para tempo constante no login (calculado na primeira vez, não na inicialização)
+let DUMMY_HASH;
+const dummyHash = () => (DUMMY_HASH ||= bcrypt.hashSync('dummy-password-for-timing', 12));
 
 // Planos públicos vêm da central; sem central, o cadastro segue com acesso inicial liberado
 router.get('/plans', h(async (_req, res) => {
@@ -109,7 +112,7 @@ router.post('/login', h(async (req, res) => {
   await rateLimit(`login-user:${b.email}`, 15, 900);
   const { rows } = await q('select * from users where lower(email) = $1', [b.email]);
   const u = rows[0];
-  const ok = await bcrypt.compare(b.password, u?.password_hash || DUMMY_HASH); // tempo constante
+  const ok = await bcrypt.compare(b.password, u?.password_hash || dummyHash()); // tempo constante
   const fail = new HttpError(401, 'E-mail ou senha incorretos', 'bad_credentials');
   if (!u || !u.active) throw fail;
   if (u.locked_until && new Date(u.locked_until) > new Date())

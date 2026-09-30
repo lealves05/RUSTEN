@@ -1,17 +1,26 @@
 // Núcleo compartilhado: banco, erros, validação, dinheiro e datas comerciais.
 import pg from 'pg';
 import crypto from 'node:crypto';
+import { Buffer } from 'node:buffer';
+import { env } from './env.js';
 
 pg.types.setTypeParser(20, (v) => Number(v)); // bigint → number (centavos cabem com folga em 2^53)
 pg.types.setTypeParser(1700, (v) => Number(v)); // numeric (quantidades) → number
 pg.types.setTypeParser(1082, (v) => v); // date como texto AAAA-MM-DD
 
 const isLocal = (url) => /localhost|127\.0\.0\.1|\/tmp/.test(url || '');
+const dbUrl = env.DATABASE_URL || env.SUPABASE_DB_URL;
 export const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL && !isLocal(process.env.DATABASE_URL) ? { rejectUnauthorized: false } : undefined,
-  max: Number(process.env.DB_POOL_MAX || 10),
+  connectionString: dbUrl,
+  ssl: dbUrl && !isLocal(dbUrl) ? { rejectUnauthorized: false } : undefined,
+  max: Number(env.DB_POOL_MAX || 10),
 });
+// Esquema próprio (ex.: RUSTEN hospedado no mesmo projeto Supabase de outro sistema)
+const schema = env.DB_SCHEMA;
+if (schema) {
+  if (!/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error('DB_SCHEMA inválido');
+  pool.on('connect', (client) => { client.query(`set search_path to ${schema}, public`).catch(() => {}); });
+}
 
 export const q = (text, params) => pool.query(text, params);
 

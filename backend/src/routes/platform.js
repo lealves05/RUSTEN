@@ -6,6 +6,7 @@ import { q, h, parse, notFound, randomToken } from '../lib/core.js';
 import { auth, audit, need } from '../lib/auth.js';
 import { MODULES } from '../lib/catalog.js';
 import { verifyPlatform, tenantSummary, applyAccess, flushOutbox, callHub, hubConfigured, PRODUCT_CODE } from '../lib/platform.js';
+import { env } from '../lib/env.js';
 
 export const platformRouter = Router();
 platformRouter.use(verifyPlatform);
@@ -56,7 +57,7 @@ platformRouter.post('/tenants/:id/owner-reset', h(async (req, res) => {
 // Rotina periódica (Render Cron / Vercel Cron) para reenviar eventos à central
 export const cronRouter = Router();
 cronRouter.get('/platform', h(async (req, res) => {
-  const secret = process.env.CRON_SECRET;
+  const secret = env.CRON_SECRET;
   if (!secret || req.headers.authorization !== `Bearer ${secret}`) return res.status(401).json({ error: 'não autorizado' });
   res.json(await flushOutbox(50));
 }));

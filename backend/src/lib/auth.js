@@ -1,11 +1,15 @@
 // Autenticação, contexto da requisição, permissões, auditoria e política de acesso da assinatura.
 import crypto from 'node:crypto';
+import { Buffer } from 'node:buffer';
 import jwt from 'jsonwebtoken';
 import { q, HttpError, forbidden } from './core.js';
 import { MODULES } from './catalog.js';
+import { env } from './env.js';
 
-const isProd = process.env.NODE_ENV === 'production';
-const rootSecret = process.env.JWT_SECRET || (isProd ? null : 'dev-only-rusten-secret-not-for-production');
+const isProd = env.NODE_ENV === 'production';
+// Em Supabase Edge sem JWT_SECRET, deriva do segredo de serviço do projeto (nunca exposto ao navegador)
+const rootSecret = env.JWT_SECRET || env.SUPABASE_SERVICE_ROLE_KEY
+  || (isProd ? null : 'dev-only-rusten-secret-not-for-production');
 if (!rootSecret) throw new Error('JWT_SECRET é obrigatório em produção');
 
 // Chaves derivadas por finalidade (HKDF): vazamento de uma não compromete as outras

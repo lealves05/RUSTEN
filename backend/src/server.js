@@ -16,14 +16,17 @@ import { router as cashRouter } from './routes/cash.js';
 import { router as homeRouter } from './routes/home.js';
 import { platformRouter, cronRouter, accessRouter } from './routes/platform.js';
 import { flushOutbox } from './lib/platform.js';
+import { env } from './lib/env.js';
 
 export function createApp() {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
   app.use(helmet());
-  const origins = (process.env.CORS_ORIGINS || 'http://localhost:5173').split(',').map((s) => s.trim()).filter(Boolean);
-  app.use(cors({ origin: (o, cb) => cb(null, !o || origins.includes(o)), credentials: false,
+  // Autenticação por token no cabeçalho (sem cookies). CORS_ORIGINS='*' libera qualquer origem HTTPS.
+  const origins = (env.CORS_ORIGINS || 'http://localhost:5173').split(',').map((s) => s.trim()).filter(Boolean);
+  const allowed = (o) => !o || origins.includes(o) || (origins.includes('*') && /^https:\/\//.test(o));
+  app.use(cors({ origin: (o, cb) => cb(null, allowed(o)), credentials: false,
     allowedHeaders: ['content-type', 'authorization', 'x-terminal-id'] }));
   // Corpo cru preservado para conferir assinaturas da central
   app.use(express.json({ limit: '1mb', verify: (req, _res, buf) => { req.rawBody = buf.toString('utf8'); } }));
@@ -57,9 +60,9 @@ export function createApp() {
   return app;
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+const isMain = !env.EDGE_RUNTIME && process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (isMain) {
-  const port = Number(process.env.PORT || 3001);
+  const port = Number(env.PORT || 3001);
   await migrate();
   createApp().listen(port, () => console.log(`RUSTEN API na porta ${port}`));
   setInterval(() => flushOutbox().catch(() => {}), 60_000).unref();

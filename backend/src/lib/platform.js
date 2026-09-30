@@ -4,9 +4,10 @@
    janela de 5 minutos e nonce de uso único. Sem PLATFORM_SECRET a central fica desligada e nada é bloqueado. */
 import crypto from 'node:crypto';
 import { q, sha256, safeEqual, HttpError } from './core.js';
+import { env } from './env.js';
 
 export const PRODUCT_CODE = 'rusten';
-export const hubConfigured = () => !!(process.env.PLATFORM_SECRET && process.env.PLATFORM_HUB_URL);
+export const hubConfigured = () => !!(env.PLATFORM_SECRET && env.PLATFORM_HUB_URL);
 const WINDOW_MS = 5 * 60 * 1000;
 
 export function sign(secret, { method, path, body = '', ts = Date.now(), nonce = crypto.randomBytes(16).toString('hex') }) {
@@ -18,14 +19,14 @@ export function sign(secret, { method, path, body = '', ts = Date.now(), nonce =
 // Middleware para rotas chamadas pela central. Corpo cru guardado em req.rawBody (ver server.js).
 export async function verifyPlatform(req, _res, next) {
   try {
-    const secret = process.env.PLATFORM_SECRET;
+    const secret = env.PLATFORM_SECRET;
     if (!secret) throw new HttpError(503, 'Central não configurada', 'platform_disabled');
     const ts = Number(req.headers['x-platform-timestamp']);
     const nonce = String(req.headers['x-platform-nonce'] || '');
     const sig = String(req.headers['x-platform-signature'] || '');
     if (!ts || Math.abs(Date.now() - ts) > WINDOW_MS) throw new HttpError(401, 'Assinatura expirada', 'bad_signature');
     if (!/^[a-zA-Z0-9_-]{16,64}$/.test(nonce)) throw new HttpError(401, 'Nonce inválido', 'bad_signature');
-    const expected = sign(secret, { method: req.method, path: req.originalUrl.split('?')[0], body: req.rawBody || '', ts, nonce })['x-platform-signature'];
+    const expected = sign(secret, { method: req.method, path: req.originalUrl.split('?')[0].replace(env.PATH_PREFIX || /^$/, ''), body: req.rawBody || '', ts, nonce })['x-platform-signature'];
     if (!safeEqual(expected, sig)) throw new HttpError(401, 'Assinatura inválida', 'bad_signature');
     const r = await q('insert into platform_nonces (nonce) values ($1) on conflict do nothing returning nonce', [nonce]);
     if (!r.rows[0]) throw new HttpError(401, 'Requisição repetida', 'replay');
@@ -36,12 +37,12 @@ export async function verifyPlatform(req, _res, next) {
 
 export async function callHub(method, path, payload) {
   if (!hubConfigured()) throw new HttpError(503, 'Central não configurada', 'platform_disabled');
-  const base = new URL(process.env.PLATFORM_HUB_URL);
-  if (base.protocol !== 'https:' && process.env.NODE_ENV === 'production') throw new Error('PLATFORM_HUB_URL deve usar HTTPS');
+  const base = new URL(env.PLATFORM_HUB_URL);
+  if (base.protocol !== 'https:' && env.NODE_ENV === 'production') throw new Error('PLATFORM_HUB_URL deve usar HTTPS');
   const body = payload ? JSON.stringify(payload) : '';
   const res = await fetch(new URL(path, base), {
     method,
-    headers: { 'content-type': 'application/json', ...sign(process.env.PLATFORM_SECRET, { method, path, body }) },
+    headers: { 'content-type': 'application/json', ...sign(env.PLATFORM_SECRET, { method, path, body }) },
     body: body || undefined,
     signal: AbortSignal.timeout(10000),
   });

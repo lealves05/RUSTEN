@@ -98,9 +98,13 @@ espera · clientes, fidelidade, avaliações, marketing · agente WhatsApp · fi
 conciliação InfinitePay (CSV genérico aguarda arquivo real para homologar o layout) · operação offline com fila local ·
 relatórios · recuperação de senha por e-mail (hoje: redefinição pelo proprietário ou senha provisória pela central).
 
-## Para colocar no ar
+## Para colocar no ar (situação em 30/09/2026)
 
-1. Extrair em `D:\Programacao\RUSTEN` (ou `git clone rusten-fase1.bundle RUSTEN`), criar o repositório no GitHub e `git push`.
-2. Supabase: projeto novo. Render: Blueprint (`render.yaml`) com `DATABASE_URL` e `CORS_ORIGINS`. Vercel: raiz `frontend`, `VITE_API_URL`.
-3. Conferir o formato da assinatura com o `saas/hub.js` do ORBI e só então cadastrar o sistema `rusten` no Master e preencher
-   `PLATFORM_HUB_URL`/`PLATFORM_SECRET`.
+- **API no ar**: Supabase Edge Function `rusten-api` (versão 3) no projeto TORVEN, tabelas no esquema isolado **`rusten`**
+  (26 tabelas; nada do TORVEN foi alterado). O plano gratuito limita a 2 projetos, por isso não houve projeto próprio.
+  Endereço: `https://dwfbxrfniarhufltmlhb.supabase.co/functions/v1/rusten-api` — `/api/health` respondendo OK.
+  Ajustes para o Edge: `lib/env.js` (process.env é somente leitura), `Buffer` de `node:buffer`, `deno.json` com `npm:`.
+- **Site**: `frontend/.env.production` já aponta para a API. Falta hospedar na Vercel (exige login do Leandro):
+  na pasta `frontend`, `npx vercel --prod`, ou criar o repositório `RUSTEN` no GitHub e importar na Vercel (raiz `frontend`).
+- Commit local 22af563 (entregue como `RUSTEN.zip` e `rusten.bundle`).
+- Central: conferir o formato da assinatura com o `saas/hub.js` do ORBI antes de cadastrar o sistema `rusten` no Master.

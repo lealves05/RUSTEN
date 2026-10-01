@@ -2,8 +2,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  ArrowRightLeft, Ban, Hand, Keyboard, Minus, Pause, Play, Plus, Printer, Receipt, ScanBarcode, Star, Store, Timer, X,
+  ArrowRightLeft, Ban, ChefHat, Gift, Hand, Keyboard, Minus, Pause, Play, Plus, Printer, Receipt, ScanBarcode, Star, Store, Timer, UserRound, X,
 } from 'lucide-react';
+import CustomerPicker from '../components/CustomerPicker.jsx';
 import { api, newKey } from '../lib/api.js';
 import { money, qtyFmt, bp, time } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
@@ -28,6 +29,7 @@ export default function Pdv() {
   const [search, setSearch] = useState('');
   const [qtyNext, setQtyNext] = useState(1);
   const [loadErr, setLoadErr] = useState(null);
+  const [reviewFor, setReviewFor] = useState(null);
 
   // Motor de leitura
   const [phase, setPhase] = useState('idle'); // idle | await_card | await_product | sending | uncertain
@@ -324,6 +326,8 @@ export default function Pdv() {
             onRequestClose={async () => { try { await api(`/api/pdv/sessions/${active.id}/${active.status === 'aberta' ? 'request-close' : 'resume'}`, { method: 'POST' }); loadActive(); loadSessions(); } catch (e) { say('bad', e.message); } }}
             onCancelSession={async () => { const reason = prompt('Motivo do cancelamento do consumo:'); if (!reason) return; try { await api(`/api/pdv/sessions/${active.id}/cancel`, { method: 'POST', body: { reason } }); setActiveId(null); loadSessions(); } catch (e) { say('bad', e.message); } }}
             onSuspend={async () => { await api(`/api/pdv/sessions/${active.id}/suspend`, { method: 'POST', body: { suspended: !active.suspended } }).catch(() => {}); loadActive(); loadSessions(); }}
+            onCustomer={() => setModal('customer')} onRedeem={() => setModal('redeem')}
+            onSend={async () => { try { const r = await api(`/api/pdv/sessions/${active.id}/send`, { method: 'POST' }); toast(`${r.sent} item(ns) enviado(s) à produção`); loadActive(); } catch (e) { say('bad', e.message); } }}
             can={s.can} />
         </section>
 
@@ -374,11 +378,14 @@ export default function Pdv() {
       <ExceptionModal open={!!exceptionFor} product={exceptionFor?.product} destination={exceptionFor?.destination} requiresManager={st.exception_requires_manager}
         onCancel={() => setExceptionFor(null)} onConfirm={onException} />
       <PaymentModal open={modal === 'pay'} session={active} onClose={() => setModal(null)}
-        onChanged={async (closed) => { if (closed) { setActiveId(null); setActive(null); toast('Consumo encerrado'); } else await loadActive(); loadSessions(); }} />
+        onChanged={async (closed) => { if (closed) { const closedId = active?.id; setActiveId(null); setActive(null); toast('Consumo encerrado'); if (s.hasModule('marketing')) setReviewFor(closedId); } else await loadActive(); loadSessions(); }} />
+      <ReviewLinkModal sessionId={reviewFor} onClose={() => setReviewFor(null)} />
       <CancelItemModal open={modal === 'cancel'} item={cancelItem} onClose={() => setModal(null)} onDone={() => { toast('Item cancelado'); loadActive(); loadSessions(); }} />
       <TransferModal open={modal === 'transfer'} session={active} sessions={sessions} onClose={() => setModal(null)} onDone={() => { toast('Itens transferidos'); loadActive(); loadSessions(); }} />
       <OpenSessionModal open={modal === 'open'} onClose={() => setModal(null)} onOpened={(id) => { setActiveId(id); loadSessions(); }} />
       <FeeModal open={modal === 'fee'} session={active} onClose={() => setModal(null)} onDone={() => loadActive()} />
+      <AttachCustomerModal open={modal === 'customer'} session={active} onClose={() => setModal(null)} onDone={() => { loadActive(); loadSessions(); }} />
+      <RedeemModal open={modal === 'redeem'} session={active} onClose={() => setModal(null)} onDone={() => { toast('Pontos resgatados'); loadActive(); }} />
     </div>
   );
 }
@@ -403,7 +410,7 @@ function SessionsStrip({ sessions, activeId, onPick, onOpen, onCounter, canOpen 
   );
 }
 
-function ActivePanel({ session: a, last, tz, onPay, onPrint, onCancelItem, onTransfer, onFee, onRequestClose, onCancelSession, onSuspend, can }) {
+function ActivePanel({ session: a, last, tz, onPay, onPrint, onCancelItem, onTransfer, onFee, onRequestClose, onCancelSession, onSuspend, onCustomer, onRedeem, onSend, can }) {
   if (!a) {
     return <div className="p-4"><Empty icon={Receipt} title="Nenhum destino selecionado">Selecione um consumo, leia uma comanda ou inicie uma venda de balcão.</Empty>
       {last && <LastLaunch last={last} tz={tz} />}</div>;
@@ -419,6 +426,16 @@ function ActivePanel({ session: a, last, tz, onPay, onPrint, onCancelItem, onTra
         </div>
         {a.status === 'em_fechamento' && <Badge tone="warn">Conta pedida</Badge>}
       </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+        {a.customer_id ? (
+          <span className="chip border-line bg-raised"><UserRound size={12} /> {a.customer_name}{a.customer_points ? ` · ${a.customer_points} pts` : ''}</span>
+        ) : a.customer_name ? <span className="chip border-line bg-raised">{a.customer_name}</span> : null}
+        {can('clientes.visualizar') && ['aberta', 'em_fechamento'].includes(a.status) && <button className="text-xs underline" onClick={onCustomer}>{a.customer_id ? 'trocar cliente' : 'identificar cliente (CPF)'}</button>}
+        {a.customer_id && a.customer_points > 0 && can('pdv.receber') && t.balance > 0 && <button className="text-xs underline" onClick={onRedeem}><Gift size={12} className="inline" /> usar pontos</button>}
+      </div>
+      {a.pending_send > 0 && (
+        <button className="btn-primary mt-2 w-full" onClick={onSend}><ChefHat size={16} /> Enviar à produção ({a.pending_send})</button>
+      )}
       <ul className="mt-3 max-h-[40vh] divide-y divide-line overflow-y-auto" aria-label="Itens">
         {!items.length && <li className="py-4 text-sm text-muted">Sem itens lançados.</li>}
         {items.map((i) => (
@@ -427,7 +444,7 @@ function ActivePanel({ session: a, last, tz, onPay, onPrint, onCancelItem, onTra
               <div className="font-medium">{qtyFmt(i.qty, i.unit)} × {i.description}</div>
               {!!i.modifiers?.length && <div className="text-xs text-muted">{i.modifiers.map((m) => m.name).join(', ')}</div>}
               {i.notes && <div className="text-xs italic text-muted">Obs.: {i.notes}</div>}
-              <div className="text-[10px] uppercase text-muted">{({ manual: 'manual', continua: 'leitura', dupla: 'dupla leitura', excecao: 'exceção', balcao: 'balcão' })[i.launch_mode]} · {time(i.created_at, tz)}{i.transferred_from ? ' · transferido' : ''}{i.status !== 'ativo' && i.cancel_reason ? ` · ${i.cancel_reason}` : ''}</div>
+              <div className="text-[10px] uppercase text-muted">{({ manual: 'manual', continua: 'leitura', dupla: 'dupla leitura', excecao: 'exceção', balcao: 'balcão', delivery: 'delivery' })[i.launch_mode]}{i.status === 'ativo' && i.kitchen_status !== 'nao_produz' ? ` · ${i.sent_at ? ({ novo: 'na fila', aceito: 'aceito', preparando: 'preparando', pronto: 'pronto', entregue: 'entregue', cancelado: 'cancelado' })[i.kitchen_status] : 'aguardando envio'}` : ''} · {time(i.created_at, tz)}{i.transferred_from ? ' · transferido' : ''}{i.status !== 'ativo' && i.cancel_reason ? ` · ${i.cancel_reason}` : ''}</div>
             </div>
             <div className="text-right">
               <div>{money(i.total_cents)}</div>
@@ -439,6 +456,7 @@ function ActivePanel({ session: a, last, tz, onPay, onPrint, onCancelItem, onTra
       <dl className="mt-3 space-y-0.5 border-t border-line pt-2 text-sm">
         <div className="flex justify-between"><dt>Consumo</dt><dd>{money(t.items)}</dd></div>
         <div className="flex justify-between"><dt>Taxa de serviço {bp(t.serviceFeeBp)} <button className="text-xs underline" onClick={onFee}>ajustar</button></dt><dd>{money(t.serviceFee)}</dd></div>
+        {t.deliveryFee > 0 && <div className="flex justify-between"><dt>Taxa de entrega</dt><dd>{money(t.deliveryFee)}</dd></div>}
         <div className="flex justify-between"><dt>Pago</dt><dd>{money(t.paid)}</dd></div>
         <div className="flex justify-between font-display text-3xl"><dt>Saldo</dt><dd>{money(t.balance)}</dd></div>
       </dl>
@@ -470,17 +488,19 @@ function OpenSessionModal({ open, onClose, onOpened }) {
   const [tables, setTables] = useState([]);
   const [pick, setPick] = useState('');
   const [name, setName] = useState('');
+  const [customer, setCustomer] = useState(null);
   const [err, setErr] = useState(null);
+  const [pickerKey, setPickerKey] = useState(0);
   useEffect(() => {
     if (!open) return;
-    setErr(null); setPick(''); setName('');
+    setErr(null); setPick(''); setName(''); setCustomer(null); setPickerKey((k) => k + 1);
     api('/api/floor/cards').then((r) => setCards(r.cards)).catch(() => {});
     api('/api/floor/tables').then((r) => setTables(r.tables)).catch(() => {});
   }, [open]);
   const free = cards.filter((c) => c.status === 'ativo' && !c.session_id);
   const go = async () => {
     try {
-      const body = { kind, customer_name: name || undefined };
+      const body = { kind, customer_name: name || undefined, customer_id: customer?.id || undefined };
       if (kind === 'comanda') { const c = free.find((x) => String(x.number) === String(pick)); if (!c) throw new Error('Comanda livre não encontrada'); body.card_id = c.id; }
       if (kind === 'mesa') body.table_id = Number(pick);
       if (kind === 'retirada') body.label = name ? `Retirada ${name}` : 'Retirada';
@@ -511,7 +531,8 @@ function OpenSessionModal({ open, onClose, onOpened }) {
           ))}
         </div>
       )}
-      <Field label="Nome do cliente (opcional)" className="mt-3"><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></Field>
+      <div className="mt-3"><CustomerPicker key={pickerKey} onChange={setCustomer} onName={setName} /></div>
+      <Field label="Nome do cliente (opcional)" className="mt-3"><input className="input" value={name} onChange={(e) => setName(e.target.value)} readOnly={!!customer} data-customer-name /></Field>
       <div className="mt-3"><ErrorBox error={err} /></div>
     </Modal>
   );
@@ -540,6 +561,76 @@ function FeeModal({ open, session, onClose, onDone }) {
       <Field label="Motivo" className="mt-3"><input className="input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
       {needs && <div className="mt-3"><ManagerAuth action="taxa_servico" reason={reason} onToken={setToken} /></div>}
       <div className="mt-3"><ErrorBox error={err} /></div>
+    </Modal>
+  );
+}
+
+function AttachCustomerModal({ open, session, onClose, onDone }) {
+  const [customer, setCustomer] = useState(null);
+  const [err, setErr] = useState(null);
+  const [k, setK] = useState(0);
+  useEffect(() => { if (open) { setCustomer(null); setErr(null); setK((x) => x + 1); } }, [open]);
+  const go = async (id) => {
+    try { await api('/api/customers/attach', { method: 'POST', body: { session_id: session.id, customer_id: id } }); onDone(); onClose(); }
+    catch (e) { setErr(e); }
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="Identificar cliente"
+      footer={<>{session?.customer_id && <button className="btn-ghost mr-auto" onClick={() => go(null)}>Remover cliente</button>}<button className="btn-ghost" onClick={onClose}>Voltar</button>
+        <button className="btn-primary" disabled={!customer} onClick={() => go(customer.id)}>Vincular</button></>}>
+      <CustomerPicker key={k} onChange={setCustomer} autoFocus />
+      <p className="mt-2 text-xs text-muted">O cliente identificado acumula pontos no encerramento (se o programa de fidelidade estiver ligado) e o consumo entra no histórico dele.</p>
+      <div className="mt-3"><ErrorBox error={err} /></div>
+    </Modal>
+  );
+}
+
+function RedeemModal({ open, session, onClose, onDone }) {
+  const [pts, setPts] = useState('');
+  const [err, setErr] = useState(null);
+  const [cfg, setCfg] = useState(null);
+  useEffect(() => { if (open) { setPts(''); setErr(null); api('/api/customers/summary').then((r) => setCfg(r.loyalty)).catch(() => {}); } }, [open]);
+  const n = Number(pts) || 0;
+  const value = cfg ? n * cfg.point_value_cents : 0;
+  const go = async () => {
+    try { await api(`/api/customers/${session.customer_id}/redeem`, { method: 'POST', body: { session_id: session.id, points: n, idempotency_key: newKey() } }); onDone(); onClose(); }
+    catch (e) { setErr(e); }
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="Usar pontos" footer={<><button className="btn-ghost" onClick={onClose}>Voltar</button><button className="btn-primary" disabled={!n} onClick={go}>Resgatar {money(value)}</button></>}>
+      <p className="text-sm">{session?.customer_name} tem <b>{session?.customer_points}</b> pontos{cfg ? ` (cada ponto vale ${money(cfg.point_value_cents)}; mínimo ${cfg.min_redeem})` : ''}.</p>
+      <Field label="Pontos a usar" className="mt-3"><input className="input text-2xl" inputMode="numeric" value={pts} onChange={(e) => setPts(e.target.value.replace(/\D/g, ''))} /></Field>
+      <p className="mt-2 text-xs text-muted">O resgate entra como pagamento "vale". Se o pagamento for estornado, os pontos voltam ao cliente.</p>
+      <div className="mt-3"><ErrorBox error={err} /></div>
+    </Modal>
+  );
+}
+
+// Depois do fechamento: QR/link para o cliente avaliar a experiência (uma avaliação por consumo)
+function ReviewLinkModal({ sessionId, onClose }) {
+  const [d, setD] = useState(null);
+  useEffect(() => {
+    if (!sessionId) { setD(null); return; }
+    api(`/api/marketing/review-link/${sessionId}`).then(async (r) => {
+      const url = `${location.origin}${r.path}`;
+      const QR = (await import('qrcode')).default;
+      setD({ url, qr: await QR.toDataURL(url, { margin: 1, width: 220 }) });
+    }).catch(() => onClose());
+  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!sessionId || !d) return null;
+  const print = () => {
+    const w = window.open('', '_blank', 'width=320,height=480'); if (!w) return;
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Avalie</title><style>body{font-family:monospace;text-align:center;margin:12px}</style></head><body>
+      <b>Como foi sua experiência?</b><br><img src="${d.qr}" width="200"><br><small>Aponte a câmera para avaliar</small><script>window.print()</script></body></html>`);
+    w.document.close();
+  };
+  return (
+    <Modal open onClose={onClose} title="Avaliação do cliente" footer={<><button className="btn-ghost" onClick={print}><Printer size={16} /> Imprimir QR</button><button className="btn-primary" onClick={onClose}>Concluir</button></>}>
+      <div className="text-center">
+        <img src={d.qr} alt="QR para avaliar" className="mx-auto rounded bg-white p-2" width={200} height={200} />
+        <p className="mt-2 text-sm">Mostre ao cliente ou imprima: ele avalia de 1 a 5 estrelas pelo celular.</p>
+        <p className="mt-1 break-all font-mono text-[11px] text-muted">{d.url}</p>
+      </div>
     </Modal>
   );
 }

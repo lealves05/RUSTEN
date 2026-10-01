@@ -6,6 +6,7 @@ import { need, audit, assertCan } from '../lib/auth.js';
 import { deliveryConfig, createDeliveryOrder, FLOW, STATUS_LABEL } from '../lib/delivery.js';
 import { reverseForItem } from '../lib/stock.js';
 import { sessionTotals } from '../lib/pdv.js';
+import { earnPoints } from '../lib/customers.js';
 
 export const router = Router();
 
@@ -107,6 +108,12 @@ router.post('/orders/:id/status', h(async (req, res) => {
     if (b.to === 'entregue') {
       const t = await sessionTotals(db, o.session_id);
       if (t.balance > 0 && !b.proof) throw conflict(`Saldo de R$ ${(t.balance / 100).toFixed(2).replace('.', ',')} em aberto: registre o pagamento ou informe o comprovante`, 'balance_pending');
+      // pago e entregue: encerra o consumo (pontos de fidelidade, relatórios)
+      const sess = (await db.query('select * from consumption_sessions where id = $1 for update', [o.session_id])).rows[0];
+      if (t.balance === 0 && t.items > 0 && ['aberta', 'em_fechamento'].includes(sess.status)) {
+        await db.query("update consumption_sessions set status = 'encerrada', closed_at = now(), closed_by = $2, version = version + 1 where id = $1", [sess.id, req.ctx.userId]);
+        await earnPoints(db, req.ctx, sess, t.items);
+      }
     }
     await db.query(`update delivery_orders set status = $2, cancel_reason = coalesce($3, cancel_reason), proof = coalesce($4, proof),
         eta_minutes = coalesce($5, eta_minutes), updated_at = now() where id = $1`, [o.id, b.to, b.to === 'cancelado' ? b.reason : null, b.proof ?? null, b.eta_minutes ?? null]);

@@ -77,6 +77,14 @@ router.get('/summary', need('clientes.visualizar'), h(async (req, res) => {
   res.json({ ...r, tags, loyalty: loyaltyConfig(c.settings) });
 }));
 
+router.put('/loyalty', need('clientes.gerenciar', 'configuracoes.gerenciar'), h(async (req, res) => {
+  const b = parse(z.object({ enabled: z.boolean(), cents_per_point: z.number().int().min(1).max(100000), point_value_cents: z.number().int().min(1).max(10000),
+    validity_days: z.number().int().min(7).max(3650), min_redeem: z.number().int().min(1).max(100000) }), req.body);
+  await q(`update companies set settings = jsonb_set(settings, '{loyalty}', $2::jsonb) where id = $1`, [req.ctx.companyId, JSON.stringify(b)]);
+  await audit({ query: q }, req.ctx, 'fidelidade.configuracao', { data: b });
+  res.json({ ok: true });
+}));
+
 router.get('/:id', need('clientes.visualizar'), h(async (req, res) => {
   const id = Number(req.params.id);
   await tx((db) => expirePoints(db, req.ctx.companyId, id));

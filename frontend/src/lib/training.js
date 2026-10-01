@@ -8,6 +8,13 @@ export const MODULES = [
   { key: 'caixa', label: 'Caixa' },
   { key: 'cadastros', label: 'Cardápio' },
   { key: 'config', label: 'Configurações' },
+  { key: 'clientes', label: 'Clientes e fidelidade' },
+  { key: 'cozinha', label: 'Cozinha' },
+  { key: 'estoque', label: 'Estoque' },
+  { key: 'delivery', label: 'Delivery' },
+  { key: 'relatorios', label: 'Relatórios' },
+  { key: 'marketing', label: 'Marketing' },
+  { key: 'agente', label: 'Agente WhatsApp' },
 ];
 
 export const LESSONS = [
@@ -35,6 +42,22 @@ export const LESSONS = [
     desc: 'Cadastrar um produto com preço, setor e código de leitura.', learn: ['Cadastrar produto e preço', 'Setor de produção', 'Códigos de barras para o leitor'] },
   { n: 12, file: '12-configurar-pdv-e-equipe', mod: 'config', s: 38, title: 'Configurar o PDV e a equipe', routes: ['/configuracoes'],
     desc: 'Modo do leitor, regras de segurança, usuários e perfis.', learn: ['Modo padrão e dupla leitura obrigatória', 'Taxa de serviço', 'Usuários e perfis de acesso'] },
+  { n: 13, file: '13-comanda-pelo-cpf', mod: 'clientes', s: 62, title: 'Abrir a comanda pelo CPF', routes: [],
+    desc: 'O nome do cliente é preenchido sozinho a partir do CPF.', learn: ['Buscar o cliente pelo CPF', 'Cadastro rápido quando não existe', 'Identificar o cliente depois'] },
+  { n: 14, file: '14-cozinha-kds', mod: 'cozinha', s: 54, title: 'Cozinha: a fila de produção', routes: ['/cozinha'],
+    desc: 'Aceitar, preparar e entregar, com alerta de atraso e de cancelamento.', learn: ['Filas por setor', 'Avançar as etapas do item', 'Atrasos e cancelamentos'] },
+  { n: 15, file: '15-estoque-e-fichas', mod: 'estoque', s: 65, title: 'Estoque e fichas técnicas', routes: ['/estoque'],
+    desc: 'Insumos, ficha técnica com custo e margem, compras e inventário.', learn: ['Cadastrar insumos com saldo e custo', 'Montar a ficha técnica', 'Baixa automática nas vendas'] },
+  { n: 16, file: '16-delivery-e-cardapio-digital', mod: 'delivery', s: 53, title: 'Delivery e cardápio digital', routes: ['/delivery'],
+    desc: 'O cliente pede pelo link; você confirma, prepara, entrega e recebe.', learn: ['Ligar o cardápio digital', 'Como o cliente faz o pedido', 'Confirmar, entregar e receber'] },
+  { n: 17, file: '17-clientes-e-fidelidade', mod: 'clientes', s: 54, title: 'Clientes e fidelidade', routes: ['/clientes'],
+    desc: 'Cadastro, histórico de consumo, pontos e consentimentos.', learn: ['Regras do programa de pontos', 'Histórico e extrato do cliente', 'Consentimento para mensagens'] },
+  { n: 18, file: '18-relatorios', mod: 'relatorios', s: 47, title: 'Relatórios', routes: ['/relatorios'],
+    desc: 'Faturamento, produtos, equipe, controle e financeiro.', learn: ['Escolher o período', 'Curva ABC, CMV e margem', 'Exportar e imprimir'] },
+  { n: 19, file: '19-marketing-e-avaliacoes', mod: 'marketing', s: 46, title: 'Marketing e avaliações', routes: ['/marketing'],
+    desc: 'Satisfação dos clientes e campanhas só para quem consentiu.', learn: ['Avaliação pós-consumo por QR', 'Retorno às notas baixas', 'Campanhas segmentadas'] },
+  { n: 20, file: '20-agente-whatsapp', mod: 'agente', s: 59, title: 'Agente de atendimento no WhatsApp', routes: ['/agente'],
+    desc: 'Cardápio, preços, pedidos e reservas no WhatsApp, com passagem para a equipe.', learn: ['Testar no simulador', 'Pedido com resumo e confirmação', 'Caixa de entrada e integração oficial'] },
 ];
 
 export const videoUrl = (l) => `/treinamento/${l.file}.mp4`;

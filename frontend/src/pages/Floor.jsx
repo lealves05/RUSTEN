@@ -1,7 +1,7 @@
 // Salão: mapa de mesas e cartões de comanda (gerar em lote, imprimir relação, bloquear, substituir).
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Armchair, ChefHat, CircleDot, Lock, Printer, Unlock } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Armchair, CalendarDays, ChefHat, CircleDot, Lock, Printer, Unlock } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { money } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
@@ -16,7 +16,7 @@ export default function Floor() {
   const [tab, setTab] = useState('mesas');
   return (
     <div>
-      <PageHeader title="Salão" subtitle="Mesas, ocupação e cartões de comanda" />
+      <PageHeader title="Salão" subtitle="Mesas, ocupação e cartões de comanda" actions={<Link className="btn-ghost" to="/salao/reservas"><CalendarDays size={16} /> Reservas</Link>} />
       <div className="mb-4 flex gap-1 border-b border-line">
         {[['mesas', 'Mesas'], ['comandas', 'Cartões de comanda']].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)} className={`-mb-px border-b-2 px-4 py-2 font-semibold ${tab === k ? 'border-copper text-ink' : 'border-transparent text-muted'}`}>{l}</button>

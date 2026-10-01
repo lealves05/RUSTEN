@@ -69,3 +69,27 @@ export async function api(path, { method = 'GET', body, retry = true, signal } =
 }
 
 export const newKey = () => (crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : `${Date.now()}${Math.random().toString(36).slice(2)}`);
+
+// Download autenticado (CSV etc.)
+export async function download(path, filename) {
+  const headers = {};
+  if (tokens.access) headers.authorization = `Bearer ${tokens.access}`;
+  let res = await fetch(`${BASE}${path}`, { headers });
+  if (res.status === 401 && await refresh()) res = await fetch(`${BASE}${path}`, { headers: { authorization: `Bearer ${tokens.access}` } });
+  if (!res.ok) { let b = null; try { b = await res.json(); } catch { /* sem corpo */ } throw new ApiError(res.status, b); }
+  const blob = await res.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+
+// Chamadas públicas (sem sessão): cardápio digital, pedido, avaliação
+export async function publicApi(path, { method = 'GET', body } = {}) {
+  let res;
+  try { res = await fetch(`${BASE}${path}`, { method, headers: { 'content-type': 'application/json' }, body: body !== undefined ? JSON.stringify(body) : undefined }); }
+  catch { throw new ApiError(0, { error: 'Sem conexão. Verifique a internet e tente de novo.' }); }
+  const text = await res.text();
+  let data = null; try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }
+  if (!res.ok) throw new ApiError(res.status, data);
+  return data;
+}

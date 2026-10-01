@@ -166,11 +166,22 @@ router.post('/activate', auth(), h(async (req, res) => {
   await tx(async (db) => {
     if (!b.keep_data) {
       // apaga o movimento e o cardápio de exemplo; mantém unidade, terminal, mesas e cartões
+      await db.query("select set_config('rusten.purge_demo', $1, true)", [String(cid)]); // libera apagar movimentos de estoque da demonstração
+      for (const sql of ['delete from reviews where company_id = $1', 'delete from loyalty_ledger where company_id = $1 and reverses_id is not null',
+        'delete from loyalty_ledger where company_id = $1', 'delete from delivery_events where company_id = $1', 'delete from delivery_orders where company_id = $1',
+        'delete from kitchen_events where company_id = $1', 'delete from stock_movements where company_id = $1 and reverses_id is not null',
+        'delete from stock_movements where company_id = $1', 'delete from recipe_lines where company_id = $1', 'delete from recipes where company_id = $1',
+        "update products set stock_mode = 'nenhum', stock_item_id = null where company_id = $1", 'delete from purchase_lines where company_id = $1',
+        'delete from purchases where company_id = $1', 'delete from inventory_counts where company_id = $1', 'update modifier_options set stock_item_id = null where company_id = $1',
+        'delete from stock_items where company_id = $1', 'delete from reservations where company_id = $1', 'delete from conversation_messages where company_id = $1',
+        'delete from conversations where company_id = $1']) await db.query(sql, [cid]);
       await db.query('delete from payments where company_id = $1', [cid]);
       await db.query('delete from cash_movements where company_id = $1', [cid]);
       await db.query('delete from cash_sessions where company_id = $1', [cid]);
       await db.query('delete from order_items where company_id = $1', [cid]);
       await db.query('delete from consumption_sessions where company_id = $1', [cid]);
+      await db.query('delete from customers where company_id = $1', [cid]);
+      await db.query("select set_config('rusten.purge_demo', '', true)");
       await db.query("update dining_tables set status = 'livre' where company_id = $1", [cid]);
       await db.query("delete from scan_codes where company_id = $1 and entity = 'PRODUTO' and entity_id in (select id from products where company_id = $1 and demo)", [cid]);
       await db.query('delete from modifier_groups where company_id = $1 and product_id in (select id from products where company_id = $1 and demo)', [cid]);

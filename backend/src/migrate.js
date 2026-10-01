@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { pool } from './lib/core.js';
 import { env } from './lib/env.js';
 
-const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'migrations');
+const dir = import.meta.url.startsWith('file:') ? path.join(path.dirname(fileURLToPath(import.meta.url)), 'migrations') : 'migrations';
 
 export async function migrate({ log = console.log } = {}) {
   const client = await pool.connect();

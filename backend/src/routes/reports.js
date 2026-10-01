@@ -3,7 +3,7 @@
    - Faturamento = consumo (itens ativos) + taxa de serviço + taxa de entrega dos consumos ENCERRADOS no período.
    - Recebimentos = pagamentos confirmados no período (data comercial do pagamento), por forma.
    - Ticket médio = faturamento ÷ consumos encerrados.
-   - CMV = custo dos insumos baixados nas vendas (custo médio do momento) + custo cadastrado × quantidade para produtos sem controle de estoque.
+   - CMV = custo dos insumos baixados na venda (custo médio do momento); sem baixa registrada, custo cadastrado/teórico × quantidade.
    - Margem = (consumo − CMV) ÷ consumo.
    Valores financeiros só para "financeiro.visualizar"; CMV/margem só para "relatorios.cmv" — também nas exportações. */
 import { Router } from 'express';
@@ -47,7 +47,7 @@ async function build(ctx, r) {
   const byHour = (await q(`select extract(hour from i.created_at at time zone '${tz.replace(/'/g, '')}')::int as hour, count(*)::int as items, coalesce(sum(i.total_cents),0)::bigint as items_cents ${ITEM} group by 1 order by 1`, P)).rows;
   const byProduct = (await q(`select i.product_id, max(i.description) as name, max(c.name) as category, sum(i.qty)::float as qty, sum(i.total_cents)::bigint as items_cents,
       sum(coalesce((select -sum(m.qty * m.unit_cost_cents) from stock_movements m where m.ref_type = 'order_item' and m.ref_id = i.id and m.kind = 'venda'),
-        case when p.stock_mode = 'nenhum' then p.cost_cents * i.qty else 0 end))::bigint as cost_cents
+        p.cost_cents * i.qty))::bigint as cost_cents
     ${ITEM.replace('where', 'join products p on p.id = i.product_id left join categories c on c.id = p.category_id where')} group by i.product_id order by items_cents desc`, P)).rows;
   const byCategory = Object.values(byProduct.reduce((acc, p) => { const k = p.category || 'Sem categoria'; acc[k] ||= { name: k, qty: 0, items_cents: 0, cost_cents: 0 };
     acc[k].qty += p.qty; acc[k].items_cents += Number(p.items_cents); acc[k].cost_cents += Number(p.cost_cents); return acc; }, {})).sort((a, b) => b.items_cents - a.items_cents);

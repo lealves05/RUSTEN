@@ -645,6 +645,51 @@ await check('inventário: divergência aprovada vira ajuste vinculado', async ()
   assert.equal(ap.status, 200, JSON.stringify(ap.data)); assert.equal(ap.data.adjustments, 1);
   assert.equal((await apiC('GET', '/api/stock/items')).data.find((x) => x.id === carne).balance, 9.5);
 });
+await check('correção de estoque: limites, aprovação por outra pessoa, imutável e auditada', async () => {
+  const bal = async () => (await apiC('GET', '/api/stock/items')).data.find((x) => x.id === carne).balance;
+  const b0 = await bal();
+  // justificativa curta é recusada; saldo igual ao sistema não gera correção
+  assert.equal((await apiC('POST', '/api/stock/corrections', { stock_item_id: carne, counted_qty: b0 - 0.1, reason_code: 'contagem', justification: 'curta' })).status, 400);
+  assert.equal((await apiC('POST', '/api/stock/corrections', { stock_item_id: carne, counted_qty: b0, reason_code: 'contagem', justification: 'Contagem conferida duas vezes' })).status, 400);
+  // pequena e feita por quem aprova: aplicada direto, como movimento "correcao"
+  const small = await apiC('POST', '/api/stock/corrections', { stock_item_id: carne, counted_qty: b0 - 0.1, reason_code: 'contagem', justification: 'Contagem da câmara fria no fechamento', expected_system_qty: b0 });
+  assert.equal(small.status, 201, JSON.stringify(small.data)); assert.equal(small.data.status, 'aplicada');
+  assert.ok(Math.abs((await bal()) - (b0 - 0.1)) < 0.0001);
+  const mv = (await apiC('GET', `/api/stock/items/${carne}/movements`)).data[0];
+  assert.equal(mv.kind, 'correcao');
+  // saldo mudou durante a contagem → pede para conferir
+  assert.equal((await apiC('POST', '/api/stock/corrections', { stock_item_id: carne, counted_qty: 1, reason_code: 'contagem', justification: 'Contagem da câmara fria no fechamento', expected_system_qty: b0 })).data.code, 'balance_changed');
+  // grande: fica pendente; não dá para pedir outra para o mesmo insumo
+  const big = await apiC('POST', '/api/stock/corrections', { stock_item_id: carne, counted_qty: 1, reason_code: 'vencimento', justification: 'Lote de carne venceu e foi descartado', evidence: 'foto no grupo' });
+  assert.equal(big.data.status, 'pendente'); assert.ok(big.data.rules.length >= 1);
+  assert.equal((await apiC('POST', '/api/stock/corrections', { stock_item_id: carne, counted_qty: 2, reason_code: 'contagem', justification: 'Outra contagem do mesmo insumo' })).data.code, 'correction_pending');
+  // dados do pedido e registros não mudam nem somem
+  await assert.rejects(pool.query('update stock_corrections set counted_qty = 5 where id = $1', [big.data.id]));
+  await assert.rejects(pool.query('delete from stock_corrections where id = $1', [small.data.id]));
+  // proprietário sozinho (sem outro aprovador): aprova o próprio pedido só com observação, e fica marcado
+  assert.equal((await apiC('POST', `/api/stock/corrections/${big.data.id}/approve`, {})).status, 400);
+  const ap = await apiC('POST', `/api/stock/corrections/${big.data.id}/approve`, { note: 'Sou o único gerente; conferi o descarte' });
+  assert.equal(ap.status, 200, JSON.stringify(ap.data)); assert.equal(ap.data.self_approved, true);
+  assert.ok(Math.abs((await bal()) - 1) < 0.0001);
+  assert.equal((await apiC('POST', `/api/stock/corrections/${big.data.id}/approve`, {})).status, 409);
+  // com um gerente na empresa: o proprietário não aprova o próprio pedido; o gerente decide
+  await apiC('POST', '/api/admin/users', { name: 'Gerente C', email: 'gc@teste.dev', password: 'Gerente2026xyz', role_key: 'gerente' });
+  const gl = await anon('POST', '/api/auth/login', { email: 'gc@teste.dev', password: 'Gerente2026xyz' });
+  const gC = client(gl.data.access_token, C.terminal);
+  const furto = await apiC('POST', '/api/stock/corrections', { stock_item_id: carne, counted_qty: 0.9, reason_code: 'furto_desvio', justification: 'Faltou carne sem registro de saída' });
+  assert.equal(furto.data.status, 'pendente');
+  assert.equal((await apiC('POST', `/api/stock/corrections/${furto.data.id}/approve`, { note: 'Tentando aprovar o meu próprio' })).data.code, 'same_user');
+  assert.equal((await gC('POST', `/api/stock/corrections/${furto.data.id}/reject`, { note: 'x' })).status, 400);
+  assert.equal((await gC('POST', `/api/stock/corrections/${furto.data.id}/reject`, { note: 'Recontar com o estoquista' })).status, 200);
+  assert.ok(Math.abs((await bal()) - 1) < 0.0001);
+  // histórico, CSV e auditoria
+  const list = (await apiC('GET', '/api/stock/corrections')).data;
+  assert.deepEqual(list.items.slice(0, 3).map((x) => x.status), ['rejeitada', 'aplicada', 'aplicada']);
+  const csv = await fetch(`${base}/api/stock/corrections?format=csv`, { headers: { authorization: `Bearer ${C.token}`, "x-terminal-id": String(C.terminal) } });
+  assert.match(await csv.text(), /saldo_sistema;saldo_real;diferenca/);
+  const ev = (await pool.query(`select action from audit_events where company_id = $1 and action like 'estoque.correcao%'`, [C.me.company.id])).rows.map((r) => r.action);
+  for (const a of ['estoque.correcao_solicitada', 'estoque.correcao_aplicada_direto', 'estoque.correcao_aprovada', 'estoque.correcao_rejeitada']) assert.ok(ev.includes(a), a);
+});
 let dlvToken;
 await check('delivery: pedido público validado no servidor, sem duplicar, e acompanhamento', async () => {
   const cfg = { slug: 'pub-garagem', enabled: true, accepting: true, delivery: true, pickup: true, fee_cents: 800, min_order_cents: 3000, eta_minutes: 40,

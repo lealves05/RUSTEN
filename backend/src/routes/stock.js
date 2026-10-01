@@ -296,10 +296,183 @@ router.get('/settings', need('estoque.visualizar'), h(async (req, res) => {
   res.json(stockConfig(c.settings));
 }));
 router.put('/settings', need('configuracoes.gerenciar'), h(async (req, res) => {
-  const b = parse(z.object({ enabled: z.boolean(), allow_negative: z.boolean() }), req.body);
-  await q(`update companies set settings = jsonb_set(settings, '{stock}', $2::jsonb) where id = $1`, [req.ctx.companyId, JSON.stringify(b)]);
-  await audit({ query: q }, req.ctx, 'estoque.politica', { data: b });
+  const b = parse(z.object({ enabled: z.boolean().optional(), allow_negative: z.boolean().optional(),
+    correction_limit_cents: z.number().int().min(0).max(100000000).optional(), correction_max_pct: z.number().min(0).max(1000).optional(),
+    correction_expire_days: z.number().int().min(1).max(60).optional() }), req.body);
+  const before = (await q('select settings from companies where id = $1', [req.ctx.companyId])).rows[0];
+  const next = { ...stockConfig(before.settings), ...Object.fromEntries(Object.entries(b).filter(([, v]) => v !== undefined)) };
+  await q(`update companies set settings = jsonb_set(settings, '{stock}', $2::jsonb) where id = $1`, [req.ctx.companyId, JSON.stringify(next)]);
+  await audit({ query: q }, req.ctx, 'estoque.politica', { data: { antes: stockConfig(before.settings), depois: next } });
   res.json({ ok: true });
+}));
+
+// ---- Correção de estoque com padrões de auditoria ----
+/* Regras (padrões de auditoria):
+   1. Informa-se o SALDO REAL contado (não a diferença); o sistema calcula diferença e valor pelo custo médio.
+   2. Motivo de uma lista fechada + justificativa (mín. 15 caracteres); evidência opcional (nº de nota, foto, B.O.).
+   3. Nada é editado nem apagado: a correção aplicada vira um movimento "correcao" vinculado ao pedido.
+   4. Aplicação direta só por quem aprova (pdv.autorizar) e dentro dos limites de valor e de %; fora disso, ou motivo
+      "furto/desvio", ou 3ª correção do mesmo insumo em 30 dias → pendente para OUTRA pessoa aprovar.
+   5. Sem outro aprovador na empresa, o proprietário pode aprovar o próprio pedido; fica marcado como autoaprovado.
+   6. Pedido pendente vence após N dias (padrão 7): a contagem fica velha e precisa ser refeita.
+   7. Na aprovação aplica-se a diferença apurada na contagem: vendas feitas depois do pedido continuam valendo.
+   8. Tudo vai para a auditoria com antes/depois, valor, usuário, IP e decisão. */
+const REASONS = { contagem: 'Divergência de contagem', quebra: 'Quebra / avaria', vencimento: 'Vencimento / validade', erro_lancamento: 'Erro de lançamento',
+  consumo_interno: 'Consumo interno / cortesia', furto_desvio: 'Furto ou desvio', devolucao: 'Devolução ao fornecedor', outro: 'Outro' };
+const r4 = (n) => Math.round(Number(n) * 10000) / 10000;
+const corrSelect = `select c.*, c.system_qty::float as system_qty, c.counted_qty::float as counted_qty, c.diff_qty::float as diff_qty,
+    s.name as item_name, s.unit, u.name as requested_name, d.name as decided_name,
+    (select count(*)::int from stock_corrections x where x.company_id = c.company_id and x.stock_item_id = c.stock_item_id
+       and x.status = 'aplicada' and x.created_at > c.created_at - interval '30 days' and x.id <> c.id) as recent_count
+  from stock_corrections c join stock_items s on s.id = c.stock_item_id
+  left join users u on u.id = c.requested_by left join users d on d.id = c.decided_by`;
+
+async function otherApprovers(db, ctx) {
+  return (await db.query(`select count(*)::int as n from users u join roles r on r.company_id = u.company_id and r.key = u.role_key
+     where u.company_id = $1 and u.active and u.id <> $2 and 'pdv.autorizar' = any(r.permissions) and 'estoque.ajustar' = any(r.permissions)`,
+  [ctx.companyId, ctx.userId])).rows[0].n;
+}
+
+async function applyCorrection(db, ctx, c, { selfApproved = false, note = null, auto = false } = {}) {
+  const s = (await db.query('select id, avg_cost_cents from stock_items where id = $1 and company_id = $2 for update', [c.stock_item_id, ctx.companyId])).rows[0];
+  const mv = await db.query(`insert into stock_movements (company_id, stock_item_id, kind, qty, unit_cost_cents, ref_type, ref_id, reason, user_id)
+     values ($1,$2,'correcao',$3,$4,'stock_correction',$5,$6,$7) returning id`,
+  [ctx.companyId, c.stock_item_id, c.diff_qty, s.avg_cost_cents, c.id, `Correção #${c.id}: ${REASONS[c.reason_code]}`, ctx.userId]);
+  await db.query(`update stock_corrections set status = 'aplicada', decided_by = $2, decided_at = now(), decision_note = $3, self_approved = $4, movement_id = $5 where id = $1`,
+    [c.id, ctx.userId, note, selfApproved, mv.rows[0].id]);
+  await audit(db, ctx, auto ? 'estoque.correcao_aplicada_direto' : 'estoque.correcao_aprovada', { entity: 'stock_correction', entityId: c.id, reason: note || c.justification,
+    data: { insumo: c.stock_item_id, saldo_sistema: Number(c.system_qty), saldo_real: Number(c.counted_qty), diferenca: Number(c.diff_qty), valor_cents: Number(c.value_cents),
+      motivo: c.reason_code, solicitado_por: c.requested_by, autoaprovado: selfApproved, movimento: mv.rows[0].id } });
+  return mv.rows[0].id;
+}
+
+router.get('/corrections', need('estoque.visualizar'), h(async (req, res) => {
+  const params = [req.ctx.companyId]; let where = 'c.company_id = $1';
+  if (req.query.status) { params.push(String(req.query.status)); where += ` and c.status = $${params.length}`; }
+  if (req.query.from) { params.push(String(req.query.from)); where += ` and c.created_at >= $${params.length}::date`; }
+  if (req.query.to) { params.push(String(req.query.to)); where += ` and c.created_at < $${params.length}::date + 1`; }
+  if (req.query.item) { params.push(Number(req.query.item)); where += ` and c.stock_item_id = $${params.length}`; }
+  const cfg = stockConfig((await q('select settings from companies where id = $1', [req.ctx.companyId])).rows[0].settings);
+  // pendentes vencidas viram "expirada" ao listar (o pedido continua no histórico)
+  await q(`update stock_corrections set status = 'expirada', decided_at = now(), decision_note = 'Vencida sem decisão'
+     where company_id = $1 and status = 'pendente' and created_at < now() - make_interval(days => $2)`, [req.ctx.companyId, cfg.correction_expire_days]);
+  const rows = (await q(`${corrSelect} where ${where} order by c.id desc limit 500`, params)).rows;
+  const showCost = req.ctx.can('relatorios.cmv') || req.ctx.can('compras.gerenciar') || req.ctx.can('pdv.autorizar');
+  const out = rows.map((r) => ({ ...r, reason_label: REASONS[r.reason_code], value_cents: showCost ? Number(r.value_cents) : null,
+    unit_cost_cents: showCost ? Number(r.unit_cost_cents) : null, requested_ip: undefined, recurrent: r.recent_count >= 2 }));
+  if (req.query.format === 'csv') {
+    const esc = (v) => { const t = v == null ? '' : String(v); const safe = /^[=+\-@\t\r]/.test(t) ? `'${t}` : t; return `"${safe.replace(/"/g, '""')}"`; };
+    const head = ['id', 'data', 'insumo', 'unidade', 'saldo_sistema', 'saldo_real', 'diferenca', 'valor_reais', 'motivo', 'justificativa', 'evidencia', 'situacao', 'solicitado_por', 'decidido_por', 'decidido_em', 'observacao_decisao', 'autoaprovado', 'movimento'];
+    const lines = out.map((r) => [r.id, new Date(r.created_at).toISOString(), r.item_name, r.unit, r.system_qty, r.counted_qty, r.diff_qty,
+      r.value_cents == null ? '' : (r.value_cents / 100).toFixed(2), r.reason_label, r.justification, r.evidence, r.status, r.requested_name, r.decided_name,
+      r.decided_at ? new Date(r.decided_at).toISOString() : '', r.decision_note, r.self_approved ? 'sim' : 'não', r.movement_id].map(esc).join(';'));
+    await audit({ query: q }, req.ctx, 'estoque.correcoes_exportadas', { data: { linhas: out.length } });
+    res.set('content-type', 'text/csv; charset=utf-8').set('content-disposition', 'attachment; filename="correcoes-estoque.csv"');
+    return res.send(`\ufeff${head.join(';')}\n${lines.join('\n')}`);
+  }
+  res.json({ reasons: REASONS, config: cfg, items: out });
+}));
+
+router.post('/corrections', need('estoque.ajustar'), h(async (req, res) => {
+  const b = parse(z.object({ stock_item_id: z.number().int(), counted_qty: z.number().min(0).max(1000000),
+    reason_code: z.enum(Object.keys(REASONS)), justification: z.string().trim().min(15, 'Explique o motivo com pelo menos 15 caracteres').max(500),
+    evidence: z.string().trim().max(300).optional(), expected_system_qty: z.number().optional() }), req.body);
+  await rateLimit(`stock-corr:${req.ctx.userId}`, 60, 3600);
+  const out = await tx(async (db) => {
+    const s = (await db.query('select * from stock_items where id = $1 and company_id = $2 for update', [b.stock_item_id, req.ctx.companyId])).rows[0];
+    if (!s) throw notFound('Insumo não encontrado');
+    const cfg = stockConfig((await db.query('select settings from companies where id = $1', [req.ctx.companyId])).rows[0].settings);
+    const pending = (await db.query("select id from stock_corrections where company_id = $1 and stock_item_id = $2 and status = 'pendente' and created_at >= now() - make_interval(days => $3)",
+      [req.ctx.companyId, s.id, cfg.correction_expire_days])).rows[0];
+    if (pending) throw conflict(`Já existe a correção #${pending.id} pendente para este insumo. Aprove ou rejeite antes de pedir outra.`, 'correction_pending');
+    await db.query(`update stock_corrections set status = 'expirada', decided_at = now(), decision_note = 'Vencida sem decisão'
+       where company_id = $1 and stock_item_id = $2 and status = 'pendente'`, [req.ctx.companyId, s.id]);
+    const system = r4((await balances(db, req.ctx.companyId, [s.id]))[s.id] || 0);
+    // o saldo mudou desde que a tela foi aberta (venda no meio da contagem): avisa em vez de calcular errado
+    if (b.expected_system_qty != null && Math.abs(r4(b.expected_system_qty) - system) > 0.0005)
+      throw conflict(`O saldo do sistema mudou para ${system} ${s.unit} enquanto você contava. Confira e envie de novo.`, 'balance_changed', { system_qty: system });
+    const diff = r4(b.counted_qty - system);
+    if (Math.abs(diff) < 0.0005) throw bad('O saldo informado é igual ao do sistema: não há o que corrigir');
+    const cost = Number(s.avg_cost_cents) || 0;
+    const value = Math.round(diff * cost);
+    const recent = (await db.query(`select count(*)::int as n from stock_corrections where company_id = $1 and stock_item_id = $2 and status = 'aplicada' and created_at > now() - interval '30 days'`,
+      [req.ctx.companyId, s.id])).rows[0].n;
+    const rules = [];
+    if (!req.ctx.can('pdv.autorizar')) rules.push('quem pediu não tem permissão de aprovar');
+    if (Math.abs(value) > cfg.correction_limit_cents) rules.push(`valor acima do limite de R$ ${(cfg.correction_limit_cents / 100).toFixed(2).replace('.', ',')}`);
+    if (system > 0 && (Math.abs(diff) / system) * 100 > cfg.correction_max_pct) rules.push(`diferença acima de ${cfg.correction_max_pct}% do saldo`);
+    if (b.reason_code === 'furto_desvio') rules.push('motivo furto/desvio sempre exige aprovação');
+    if (recent >= 2) rules.push(`${recent + 1}ª correção deste insumo em 30 dias`);
+    const ins = await db.query(`insert into stock_corrections (company_id, stock_item_id, system_qty, counted_qty, diff_qty, unit_cost_cents, value_cents, reason_code,
+        justification, evidence, needs_approval, approval_rule, requested_by, requested_ip) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning *`,
+    [req.ctx.companyId, s.id, system, b.counted_qty, diff, cost, value, b.reason_code, b.justification, b.evidence || null, rules.length > 0, rules.join('; ') || null,
+      req.ctx.userId, String(req.ip || '').slice(0, 64)]);
+    const c = ins.rows[0];
+    await audit(db, req.ctx, 'estoque.correcao_solicitada', { entity: 'stock_correction', entityId: c.id, reason: b.justification,
+      data: { insumo: s.id, nome: s.name, saldo_sistema: system, saldo_real: b.counted_qty, diferenca: diff, valor_cents: value, motivo: b.reason_code, regras: rules } });
+    if (!rules.length) await applyCorrection(db, req.ctx, c, { auto: true, note: 'Dentro dos limites: aplicada por quem tem permissão de aprovar' });
+    return { id: c.id, status: rules.length ? 'pendente' : 'aplicada', rules, diff_qty: diff, value_cents: value, system_qty: system };
+  });
+  res.status(201).json(out);
+}));
+
+router.post('/corrections/:id/approve', need('estoque.ajustar'), h(async (req, res) => {
+  assertCan(req.ctx, 'pdv.autorizar');
+  const b = parse(z.object({ note: z.string().trim().max(300).optional() }), req.body || {});
+  const out = await tx(async (db) => {
+    const c = (await db.query("select * from stock_corrections where id = $1 and company_id = $2 for update", [Number(req.params.id), req.ctx.companyId])).rows[0];
+    if (!c) throw notFound('Correção não encontrada');
+    if (c.status !== 'pendente') throw conflict(`Esta correção já está ${c.status}`);
+    const cfg = stockConfig((await db.query('select settings from companies where id = $1', [req.ctx.companyId])).rows[0].settings);
+    if (new Date(c.created_at).getTime() < Date.now() - cfg.correction_expire_days * 86400000) {
+      await db.query("update stock_corrections set status = 'expirada', decided_at = now(), decision_note = 'Vencida sem decisão' where id = $1", [c.id]);
+      return { expired: true };
+    }
+    let selfApproved = false;
+    if (Number(c.requested_by) === Number(req.ctx.userId)) {
+      // segregação de funções: quem pediu não aprova, a não ser que não exista outro aprovador na empresa
+      if ((await otherApprovers(db, req.ctx)) > 0 || req.ctx.level < 100) throw conflict('A aprovação deve ser feita por outra pessoa (gerente ou proprietário)', 'same_user');
+      if (!b.note || b.note.length < 10) throw bad('Sem outro aprovador na empresa: registre uma observação (mín. 10 caracteres) para aprovar o próprio pedido');
+      selfApproved = true;
+    }
+    await applyCorrection(db, req.ctx, c, { selfApproved, note: b.note || null });
+    return { ok: true, self_approved: selfApproved };
+  });
+  if (out.expired) throw conflict('Esta correção venceu sem decisão. Conte de novo e faça um novo pedido.', 'expired');
+  res.json(out);
+}));
+
+router.post('/corrections/:id/reject', need('estoque.ajustar'), h(async (req, res) => {
+  assertCan(req.ctx, 'pdv.autorizar');
+  const b = parse(z.object({ note: z.string().trim().min(5, 'Informe o motivo da rejeição').max(300) }), req.body);
+  const r = await q(`update stock_corrections set status = 'rejeitada', decided_by = $3, decided_at = now(), decision_note = $4
+     where id = $1 and company_id = $2 and status = 'pendente' returning id, stock_item_id, diff_qty, value_cents`, [Number(req.params.id), req.ctx.companyId, req.ctx.userId, b.note]);
+  if (!r.rows[0]) throw conflict('Esta correção não está pendente');
+  await audit({ query: q }, req.ctx, 'estoque.correcao_rejeitada', { entity: 'stock_correction', entityId: r.rows[0].id, reason: b.note,
+    data: { insumo: r.rows[0].stock_item_id, diferenca: Number(r.rows[0].diff_qty), valor_cents: Number(r.rows[0].value_cents) } });
+  res.json({ ok: true });
+}));
+
+// Controlar produtos do cardápio vendidos prontos (cerveja, refrigerante…) como itens de estoque
+router.post('/items/from-products', need('estoque.ajustar'), h(async (req, res) => {
+  const b = parse(z.object({ product_ids: z.array(z.number().int()).min(1).max(300) }), req.body);
+  const out = await tx(async (db) => {
+    const ps = (await db.query(`select id, name, cost_cents from products where company_id = $1 and id = any($2) and active and stock_mode = 'nenhum' for update`,
+      [req.ctx.companyId, b.product_ids])).rows;
+    let created = 0; let linked = 0;
+    for (const p of ps) {
+      let s = (await db.query('select id from stock_items where company_id = $1 and lower(name) = lower($2)', [req.ctx.companyId, p.name])).rows[0];
+      if (!s) {
+        s = (await db.query(`insert into stock_items (company_id, name, unit, avg_cost_cents) values ($1,$2,'un',$3) returning id`, [req.ctx.companyId, p.name.slice(0, 80), Number(p.cost_cents) || 0])).rows[0];
+        created++;
+      }
+      await db.query("update products set stock_mode = 'acabado', stock_item_id = $3, updated_at = now() where id = $1 and company_id = $2", [p.id, req.ctx.companyId, s.id]);
+      linked++;
+    }
+    await audit(db, req.ctx, 'estoque.produtos_controlados', { data: { produtos: ps.map((p) => p.id), criados: created } });
+    return { created, linked };
+  });
+  res.status(201).json(out);
 }));
 
 // ---- Leitura de notas: foto (IA de visão) ou XML da NF-e → conferência → compra recebida no estoque ----

@@ -3,7 +3,10 @@
 // estorna; depois do preparo o consumo permanece (perda registrada na auditoria do cancelamento).
 import { conflict } from './core.js';
 
-export const stockConfig = (settings) => ({ enabled: true, allow_negative: true, ...(settings?.stock || {}) });
+// Política de estoque. Correção: até `correction_limit_cents` e `correction_max_pct` um gerente aplica direto;
+// acima disso, ou por quem não aprova, a correção fica pendente para outra pessoa aprovar.
+export const STOCK_DEFAULTS = { enabled: true, allow_negative: true, correction_limit_cents: 5000, correction_max_pct: 20, correction_expire_days: 7 };
+export const stockConfig = (settings) => ({ ...STOCK_DEFAULTS, ...(settings?.stock || {}) });
 
 export async function balances(db, companyId, ids) {
   const r = await db.query(`select stock_item_id, coalesce(sum(qty),0)::numeric as qty from stock_movements

@@ -1,7 +1,7 @@
 // Estoque: insumos e saldos, fichas técnicas versionadas, compras com recebimento parcial, inventário e produção.
 import { useEffect, useState } from 'react';
-import { Camera, CheckCircle2, ClipboardCheck, FileCode2, Keyboard, KeyRound, Loader2, Package, Plus, ShoppingCart, Trash2 } from 'lucide-react';
-import { api } from '../lib/api.js';
+import { Camera, CheckCircle2, ClipboardCheck, Download, FileCode2, Keyboard, KeyRound, Loader2, Package, Plus, ShieldCheck, ShoppingCart, Trash2, Wrench } from 'lucide-react';
+import { api, download } from '../lib/api.js';
 import { money, dateTime, parseCents, centsToInput } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
 import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHeader, Toggle, useLoad, useToast } from '../components/ui.jsx';
@@ -9,8 +9,8 @@ import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHeader, Toggle, useL
 const UNITS = ['un', 'kg', 'g', 'L', 'ml'];
 const num = (v) => Number(String(v).replace(',', '.'));
 const qfmt = (n, u) => `${Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 3 })} ${u}`;
-const MOV = { entrada: 'Entrada', venda: 'Venda', estorno_venda: 'Estorno de venda', perda: 'Perda', ajuste: 'Ajuste', inventario: 'Inventário', producao_consumo: 'Produção (consumo)', producao_entrada: 'Produção (entrada)', reversao: 'Reversão' };
-const TABS = [['nota', 'Lançar nota'], ['insumos', 'Insumos'], ['fichas', 'Fichas técnicas'], ['compras', 'Compras'], ['inventario', 'Inventário']];
+const MOV = { entrada: 'Entrada', venda: 'Venda', estorno_venda: 'Estorno de venda', perda: 'Perda', ajuste: 'Ajuste', inventario: 'Inventário', producao_consumo: 'Produção (consumo)', producao_entrada: 'Produção (entrada)', reversao: 'Reversão', correcao: 'Correção' };
+const TABS = [['nota', 'Lançar nota'], ['insumos', 'Insumos'], ['fichas', 'Fichas técnicas'], ['compras', 'Compras'], ['inventario', 'Inventário'], ['correcoes', 'Correções']];
 
 export default function Stock() {
   const [tab, setTab] = useState('insumos');
@@ -25,9 +25,10 @@ export default function Stock() {
       {items.error && <ErrorBox error={items.error} onRetry={items.reload} />}
       {tab === 'nota' && <NoteImport stock={items.data || []} onDone={() => { items.reload(); setTab('insumos'); }} />}
       {tab === 'insumos' && <Items items={items} />}
+      {tab === 'correcoes' && <Corrections stock={items.data || []} onChanged={items.reload} goItems={() => setTab('insumos')} />}
       {tab === 'fichas' && <Recipes stock={items.data || []} />}
       {tab === 'compras' && <Purchases stock={items.data || []} onChanged={items.reload} />}
-      {tab === 'inventario' && <Inventory stock={items.data || []} onChanged={items.reload} />}
+      {tab === 'inventario' && <Inventory stock={items.data || []} onChanged={items.reload} goItems={() => setTab('insumos')} />}
     </div>
   );
 }
@@ -38,6 +39,8 @@ function Items({ items }) {
   const [edit, setEdit] = useState(null);
   const [mov, setMov] = useState(null);
   const [hist, setHist] = useState(null);
+  const [fix, setFix] = useState(null);
+  const [fromMenu, setFromMenu] = useState(false);
   const pol = useLoad(() => api('/api/stock/settings'), []);
   if (items.loading && !items.data) return <Loading />;
   const list = items.data || [];
@@ -49,6 +52,7 @@ function Items({ items }) {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         {s.can('estoque.ajustar') && <button className="btn-primary" onClick={() => setEdit({})}><Plus size={16} /> Novo insumo</button>}
+        {s.can('estoque.ajustar') && <button className="btn-ghost" onClick={() => setFromMenu(true)} data-from-menu><Package size={16} /> Controlar produtos do cardápio</button>}
         {!!low.length && <Badge tone="warn">{low.length} abaixo do mínimo</Badge>}
         {pol.data && s.can('configuracoes.gerenciar') && (
           <div className="ml-auto flex flex-wrap gap-2">
@@ -57,7 +61,7 @@ function Items({ items }) {
           </div>
         )}
       </div>
-      {!list.length ? <Empty icon={Package} title="Nenhum insumo">Cadastre os insumos (carne, pão, garrafas…) e depois monte as fichas técnicas dos produtos.</Empty> : (
+      {!list.length ? <Empty icon={Package} title="Nenhum insumo">Cadastre os insumos (carne, pão, garrafas…) e depois monte as fichas técnicas dos produtos. Para bebidas e itens vendidos prontos, use <b>Controlar produtos do cardápio</b>.</Empty> : (
         <div className="card overflow-x-auto">
           <table className="table-clean">
             <thead><tr><th>Insumo</th><th className="text-right">Saldo</th><th className="text-right">Mínimo</th><th>Situação</th>{list[0].avg_cost_cents != null && <th className="text-right">Custo médio</th>}<th className="text-right">Sugestão de compra</th><th /></tr></thead>
@@ -71,6 +75,7 @@ function Items({ items }) {
                 <td className="whitespace-nowrap text-right">{s.can('estoque.ajustar') && <>
                   <button className="text-xs underline" onClick={() => setMov({ item: i, kind: 'entrada' })}>entrada</button>{' · '}
                   <button className="text-xs underline" onClick={() => setMov({ item: i, kind: 'perda' })}>perda</button>{' · '}
+                  <button className="text-xs underline" onClick={() => setFix(i)} data-fix={i.id}>corrigir</button>{' · '}
                   <button className="text-xs underline" onClick={() => setEdit(i)}>editar</button></>}</td>
               </tr>
             ))}</tbody>
@@ -81,6 +86,8 @@ function Items({ items }) {
       <ItemModal data={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); items.reload(); }} />
       <MovementModal data={mov} onClose={() => setMov(null)} onSaved={() => { setMov(null); items.reload(); toast('Movimento registrado'); }} />
       <HistoryModal item={hist} onClose={() => setHist(null)} />
+      <CorrectionModal open={!!fix} item={fix} stock={list} onClose={() => setFix(null)} onDone={() => { setFix(null); items.reload(); }} />
+      <FromMenuModal open={fromMenu} onClose={() => setFromMenu(false)} onDone={() => { setFromMenu(false); items.reload(); }} />
     </div>
   );
 }
@@ -360,7 +367,7 @@ function ReceiveModal({ purchase, onClose, onSaved }) {
   );
 }
 
-function Inventory({ stock, onChanged }) {
+function Inventory({ stock, onChanged, goItems }) {
   const s = useSession();
   const toast = useToast();
   const inv = useLoad(() => api('/api/stock/inventories'), []);
@@ -376,7 +383,8 @@ function Inventory({ stock, onChanged }) {
   const discard = async (x) => { try { await api(`/api/stock/inventories/${x.id}/discard`, { method: 'POST' }); inv.reload(); } catch (e) { toast(e.message, 'bad'); } };
   return (
     <div className="space-y-3">
-      {!counts ? s.can('estoque.ajustar') && <button className="btn-primary" onClick={start} disabled={!stock.length}><ClipboardCheck size={16} /> Nova contagem</button> : (
+      {!stock.length && <NoStockHint goItems={goItems} onChanged={onChanged} />}
+      {!counts ? s.can('estoque.ajustar') && !!stock.length && <button className="btn-primary" onClick={start}><ClipboardCheck size={16} /> Nova contagem</button> : (
         <div className="card p-4">
           <h3 className="font-display text-xl">Contagem física</h3>
           <p className="text-sm text-muted">Conte o que existe de fato. Deixe em branco o que não foi contado. O saldo do sistema só é mostrado depois, na divergência.</p>
@@ -399,6 +407,223 @@ function Inventory({ stock, onChanged }) {
               {s.can('relatorios.cmv') && <td className="text-right">{money(l.value_cents)}</td>}</tr>)}</tbody></table>
         </div>
       ))}
+    </div>
+  );
+}
+
+// Sem insumos não há o que contar nem corrigir: explica e oferece os dois caminhos
+function NoStockHint({ goItems, onChanged }) {
+  const s = useSession();
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="card stripe p-5" data-no-stock>
+      <h3 className="font-display text-xl">Ainda não há itens no estoque</h3>
+      <p className="mt-1 text-sm text-muted">A contagem e a correção trabalham sobre os itens do estoque (insumos e produtos vendidos prontos). Os produtos do cardápio só entram no estoque quando você escolhe controlá-los.</p>
+      {s.can('estoque.ajustar') && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button className="btn-primary" onClick={() => setOpen(true)}><Package size={16} /> Controlar produtos do cardápio</button>
+          <button className="btn-ghost" onClick={goItems}><Plus size={16} /> Cadastrar insumo</button>
+        </div>
+      )}
+      <FromMenuModal open={open} onClose={() => setOpen(false)} onDone={() => { setOpen(false); onChanged(); }} />
+    </div>
+  );
+}
+
+// Produtos vendidos prontos (cerveja, refrigerante, água…) passam a ter estoque próprio e baixam a cada venda
+function FromMenuModal({ open, onClose, onDone }) {
+  const toast = useToast();
+  const r = useLoad(() => (open ? api('/api/stock/recipes') : Promise.resolve(null)), [open]);
+  const [sel, setSel] = useState({});
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (open) setSel({}); }, [open]);
+  if (!open) return null;
+  const list = (r.data || []).filter((p) => p.stock_mode === 'nenhum');
+  const ids = Object.keys(sel).filter((k) => sel[k]).map(Number);
+  const save = async () => {
+    setBusy(true);
+    try { const x = await api('/api/stock/items/from-products', { method: 'POST', body: { product_ids: ids } }); toast(`${x.linked} produto(s) no estoque. Agora registre o saldo pela contagem ou pela correção.`); onDone(); }
+    catch (e) { toast(e.message, 'bad'); } finally { setBusy(false); }
+  };
+  return (
+    <Modal open wide onClose={onClose} title="Controlar produtos do cardápio no estoque"
+      footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" disabled={!ids.length || busy} onClick={save}>Controlar {ids.length || ''} produto(s)</button></>}>
+      <p className="mb-3 text-sm text-muted">Use para itens vendidos do jeito que chegam (bebidas em lata/garrafa, água, sobremesas prontas). Cada um vira um item de estoque em unidades, com baixa automática na venda. Pratos montados na cozinha ficam melhor com ficha técnica.</p>
+      {r.loading ? <Loading /> : !list.length ? <p className="text-sm text-muted">Todos os produtos já têm controle de estoque.</p> : (
+        <>
+          <div className="mb-2 flex gap-2 text-xs"><button className="underline" onClick={() => setSel(Object.fromEntries(list.map((p) => [p.id, true])))}>marcar todos</button><button className="underline" onClick={() => setSel({})}>limpar</button></div>
+          <div className="grid max-h-[50vh] gap-1 overflow-auto sm:grid-cols-2">
+            {list.map((p) => (
+              <label key={p.id} className="flex cursor-pointer items-center gap-2 rounded-lg border border-line p-2 hover:bg-raised">
+                <input type="checkbox" checked={!!sel[p.id]} onChange={(e) => setSel({ ...sel, [p.id]: e.target.checked })} />
+                <span className="flex-1">{p.name}</span><span className="text-xs text-muted">{money(p.price_cents)}</span>
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+const REASON_HELP = { contagem: 'A contagem física não bate com o sistema', quebra: 'Garrafa quebrou, produto avariado', vencimento: 'Venceu e foi descartado',
+  erro_lancamento: 'Entrada ou venda lançada errada', consumo_interno: 'Consumo da equipe ou cortesia sem lançamento', furto_desvio: 'Suspeita de furto ou desvio (sempre vai para aprovação)',
+  devolucao: 'Devolvido ao fornecedor sem nota de devolução', outro: 'Explique na justificativa' };
+
+function CorrectionModal({ open, item, stock, onClose, onDone }) {
+  const s = useSession();
+  const toast = useToast();
+  const [f, setF] = useState({});
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  useEffect(() => { if (open) { setF({ id: item?.id ? String(item.id) : '', counted: '', reason: 'contagem', just: '', evidence: '' }); setErr(null); setResult(null); } }, [open, item?.id]);
+  if (!open) return null;
+  const it = stock.find((x) => String(x.id) === f.id);
+  const counted = f.counted === '' ? null : num(f.counted);
+  const diff = it && counted != null && !Number.isNaN(counted) ? Math.round((counted - it.balance) * 1000) / 1000 : null;
+  const value = diff != null && it?.avg_cost_cents != null ? Math.round(diff * it.avg_cost_cents) : null;
+  const send = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await api('/api/stock/corrections', { method: 'POST', body: { stock_item_id: Number(f.id), counted_qty: counted, reason_code: f.reason, justification: f.just.trim(),
+        evidence: f.evidence.trim() || undefined, expected_system_qty: it.balance } });
+      setResult(r);
+      toast(r.status === 'aplicada' ? 'Correção aplicada' : 'Correção enviada para aprovação');
+    } catch (e) { setErr(e); } finally { setBusy(false); }
+  };
+  if (result) {
+    return (
+      <Modal open onClose={onDone} title={`Correção #${result.id}`} footer={<button className="btn-primary" onClick={onDone}>Concluir</button>}>
+        {result.status === 'aplicada' ? <p className="flex items-center gap-2 text-ok"><CheckCircle2 size={18} /> Aplicada: o saldo de {it?.name} agora é {qfmt(counted, it?.unit)}.</p> : (
+          <div className="space-y-2">
+            <p className="font-semibold text-warn">Aguardando aprovação de outra pessoa (gerente ou proprietário).</p>
+            <ul className="list-disc pl-5 text-sm">{result.rules.map((r) => <li key={r}>{r}</li>)}</ul>
+            <p className="text-sm text-muted">O saldo só muda quando a correção for aprovada em Estoque › Correções. Pedidos não decididos vencem e precisam ser refeitos.</p>
+          </div>
+        )}
+      </Modal>
+    );
+  }
+  const ok = it && counted != null && counted >= 0 && diff !== 0 && f.just.trim().length >= 15;
+  return (
+    <Modal open wide onClose={onClose} title="Corrigir estoque"
+      footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" disabled={!ok || busy} onClick={send} data-corr-send>{busy ? 'Enviando…' : 'Registrar correção'}</button></>}>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Item do estoque" className="sm:col-span-2">
+          <select className="input" value={f.id} onChange={(e) => setF({ ...f, id: e.target.value })} disabled={!!item?.id}>
+            <option value="">Escolha…</option>{stock.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+          </select>
+        </Field>
+        {it && <div className="rounded-lg bg-raised p-3 text-sm"><div className="text-xs uppercase text-muted">Saldo no sistema agora</div><div className="font-mono text-xl">{qfmt(it.balance, it.unit)}</div></div>}
+        <Field label={`Saldo real contado${it ? ` (${it.unit})` : ''}`} hint="Informe quanto existe de fato, não a diferença">
+          <input className="input text-xl" inputMode="decimal" value={f.counted} onChange={(e) => setF({ ...f, counted: e.target.value })} data-corr-counted />
+        </Field>
+        {diff != null && (
+          <div className={`rounded-lg p-3 text-sm sm:col-span-2 ${diff < 0 ? 'bg-rust/10 text-rust' : diff > 0 ? 'bg-ok/10 text-ok' : 'bg-raised'}`}>
+            Diferença: <b>{diff > 0 ? '+' : ''}{qfmt(diff, it.unit)}</b>{value != null && <> · impacto <b>{money(value)}</b></>}{diff === 0 && ' — igual ao sistema, nada a corrigir'}
+          </div>
+        )}
+        <Field label="Motivo" className="sm:col-span-2" hint={REASON_HELP[f.reason]}>
+          <select className="input" value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} data-corr-reason>
+            {Object.entries({ contagem: 'Divergência de contagem', quebra: 'Quebra / avaria', vencimento: 'Vencimento / validade', erro_lancamento: 'Erro de lançamento', consumo_interno: 'Consumo interno / cortesia', furto_desvio: 'Furto ou desvio', devolucao: 'Devolução ao fornecedor', outro: 'Outro' }).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select>
+        </Field>
+        <Field label={`Justificativa (${f.just.trim().length}/15 caracteres no mínimo)`} className="sm:col-span-2">
+          <textarea className="input min-h-[80px]" value={f.just} maxLength={500} onChange={(e) => setF({ ...f, just: e.target.value })} placeholder="O que aconteceu, quando e quem conferiu" data-corr-just />
+        </Field>
+        <Field label="Evidência (opcional)" className="sm:col-span-2" hint="Nº da nota, foto enviada ao grupo, boletim de ocorrência…">
+          <input className="input" value={f.evidence} maxLength={300} onChange={(e) => setF({ ...f, evidence: e.target.value })} />
+        </Field>
+      </div>
+      {!s.can('pdv.autorizar') && <p className="mt-2 text-xs text-muted">Seu perfil não aprova correções: o pedido vai para um gerente ou proprietário.</p>}
+      <div className="mt-3"><ErrorBox error={err} /></div>
+    </Modal>
+  );
+}
+
+const CSTATUS = { pendente: ['warn', 'pendente'], aplicada: ['ok', 'aplicada'], rejeitada: ['bad', 'rejeitada'], expirada: ['muted', 'vencida'] };
+
+function Corrections({ stock, onChanged, goItems }) {
+  const s = useSession();
+  const toast = useToast();
+  const [status, setStatus] = useState('');
+  const c = useLoad(() => api(`/api/stock/corrections${status ? `?status=${status}` : ''}`), [status]);
+  const [open, setOpen] = useState(false);
+  const [cfg, setCfg] = useState(null);
+  useEffect(() => { if (c.data?.config) setCfg({ limit: centsToInput(c.data.config.correction_limit_cents), pct: String(c.data.config.correction_max_pct), days: String(c.data.config.correction_expire_days) }); }, [c.data?.config]);
+  const pending = (c.data?.items || []).filter((x) => x.status === 'pendente');
+  const decide = async (x, ok) => {
+    let note = '';
+    if (!ok) { note = prompt('Motivo da rejeição:') || ''; if (!note) return; }
+    else if (Number(x.requested_by) === Number(s.me?.user?.id ?? s.me?.id)) { note = prompt('Você está aprovando o próprio pedido (não há outro aprovador). Registre uma observação:') || ''; if (!note) return; }
+    try { await api(`/api/stock/corrections/${x.id}/${ok ? 'approve' : 'reject'}`, { method: 'POST', body: note ? { note } : {} }); toast(ok ? 'Correção aprovada e aplicada' : 'Correção rejeitada'); c.reload(); onChanged(); }
+    catch (e) { toast(e.message, 'bad'); c.reload(); }
+  };
+  const saveCfg = async () => {
+    try { await api('/api/stock/settings', { method: 'PUT', body: { correction_limit_cents: parseCents(cfg.limit) ?? 0, correction_max_pct: num(cfg.pct), correction_expire_days: Math.round(num(cfg.days)) } }); toast('Regras de correção salvas'); c.reload(); }
+    catch (e) { toast(e.message, 'bad'); }
+  };
+  const conf = c.data?.config;
+  return (
+    <div className="space-y-4">
+      {!stock.length && <NoStockHint goItems={goItems} onChanged={onChanged} />}
+      <div className="flex flex-wrap items-center gap-2">
+        {s.can('estoque.ajustar') && !!stock.length && <button className="btn-primary" onClick={() => setOpen(true)} data-corr-new><Wrench size={16} /> Corrigir estoque</button>}
+        {!!pending.length && <Badge tone="warn">{pending.length} aguardando aprovação</Badge>}
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <select className="input py-1.5" value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Situação">
+            <option value="">Todas</option><option value="pendente">Pendentes</option><option value="aplicada">Aplicadas</option><option value="rejeitada">Rejeitadas</option><option value="expirada">Vencidas</option>
+          </select>
+          <button className="btn-ghost" onClick={() => download(`/api/stock/corrections?format=csv${status ? `&status=${status}` : ''}`, 'correcoes-estoque.csv').catch((e) => toast(e.message, 'bad'))}><Download size={16} /> CSV</button>
+        </div>
+      </div>
+      <details className="card p-4" open={!c.data?.items?.length}>
+        <summary className="flex cursor-pointer items-center gap-2 font-semibold"><ShieldCheck size={18} className="text-copper" /> Padrões de auditoria da correção</summary>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-muted">
+          <li>Informa-se o <b>saldo real contado</b>; o sistema calcula a diferença e o valor pelo custo médio.</li>
+          <li>Motivo de uma lista fechada e <b>justificativa obrigatória</b> (mín. 15 caracteres); evidência opcional.</li>
+          <li>Aplicação direta só por gerente/proprietário e dentro dos limites{conf ? <> (até <b>{money(conf.correction_limit_cents)}</b> e <b>{conf.correction_max_pct}%</b> do saldo)</> : ''}.</li>
+          <li>Acima dos limites, motivo <b>furto/desvio</b>, 3ª correção do mesmo item em 30 dias ou pedido de quem não aprova → <b>aprovação por outra pessoa</b>.</li>
+          <li>Sem outro aprovador na empresa, o proprietário aprova o próprio pedido com observação, e o registro fica marcado como <b>autoaprovado</b>.</li>
+          <li>Pedidos pendentes <b>vencem</b> em {conf?.correction_expire_days || 7} dias: a contagem precisa ser refeita.</li>
+          <li>Nada é editado nem apagado: a correção vira um movimento "Correção" vinculado ao pedido, e tudo vai para a Auditoria (antes/depois, valor, quem pediu, quem decidiu).</li>
+        </ul>
+        {cfg && s.can('configuracoes.gerenciar') && (
+          <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-line pt-3">
+            <Field label="Limite de valor (R$)"><input className="input w-32" inputMode="decimal" value={cfg.limit} onChange={(e) => setCfg({ ...cfg, limit: e.target.value })} /></Field>
+            <Field label="Limite de diferença (%)"><input className="input w-32" inputMode="decimal" value={cfg.pct} onChange={(e) => setCfg({ ...cfg, pct: e.target.value })} /></Field>
+            <Field label="Vencimento (dias)"><input className="input w-28" inputMode="numeric" value={cfg.days} onChange={(e) => setCfg({ ...cfg, days: e.target.value })} /></Field>
+            <button className="btn-ghost" onClick={saveCfg}>Salvar regras</button>
+          </div>
+        )}
+      </details>
+      <ErrorBox error={c.error} onRetry={c.reload} />
+      {c.loading && !c.data ? <Loading /> : !(c.data?.items || []).length ? <Empty icon={Wrench} title="Nenhuma correção">As correções de saldo aparecem aqui, com quem pediu, quem aprovou e o motivo.</Empty> : (
+        <div className="card overflow-x-auto">
+          <table className="table-clean">
+            <thead><tr><th>#</th><th>Data</th><th>Item</th><th className="text-right">Sistema → Real</th><th className="text-right">Diferença</th><th className="text-right">Valor</th><th>Motivo</th><th>Situação</th><th>Pedido / decisão</th><th /></tr></thead>
+            <tbody>{c.data.items.map((x) => (
+              <tr key={x.id} data-corr-row={x.status}>
+                <td className="text-muted">{x.id}</td>
+                <td className="whitespace-nowrap">{dateTime(x.created_at, s.tz)}</td>
+                <td className="font-semibold">{x.item_name}{x.recurrent && <span className="ml-1"><Badge tone="warn">recorrente</Badge></span>}</td>
+                <td className="whitespace-nowrap text-right font-mono">{qfmt(x.system_qty, x.unit)} → {qfmt(x.counted_qty, x.unit)}</td>
+                <td className={`text-right font-mono font-semibold ${x.diff_qty < 0 ? 'text-rust' : 'text-ok'}`}>{x.diff_qty > 0 ? '+' : ''}{qfmt(x.diff_qty, x.unit)}</td>
+                <td className="text-right">{x.value_cents != null ? money(x.value_cents) : '—'}</td>
+                <td className="max-w-[260px]"><div>{x.reason_label}</div><div className="text-xs text-muted">{x.justification}{x.evidence ? ` · evidência: ${x.evidence}` : ''}</div></td>
+                <td><Badge tone={CSTATUS[x.status][0]}>{CSTATUS[x.status][1]}</Badge>{x.self_approved && <div className="mt-1"><Badge tone="warn">autoaprovada</Badge></div>}</td>
+                <td className="text-xs"><div>pedido: {x.requested_name}</div>{x.decided_name && <div>decisão: {x.decided_name}</div>}{x.decision_note && <div className="text-muted">{x.decision_note}</div>}
+                  {x.status === 'pendente' && x.approval_rule && <div className="text-warn">{x.approval_rule}</div>}</td>
+                <td className="whitespace-nowrap">{x.status === 'pendente' && s.can('pdv.autorizar') && <div className="flex gap-1">
+                  <button className="btn-ghost py-1 text-xs" onClick={() => decide(x, false)}>Rejeitar</button>
+                  <button className="btn-primary py-1 text-xs" onClick={() => decide(x, true)} data-corr-approve={x.id}>Aprovar</button></div>}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+      <CorrectionModal open={open} stock={stock} onClose={() => setOpen(false)} onDone={() => { setOpen(false); c.reload(); onChanged(); }} />
     </div>
   );
 }

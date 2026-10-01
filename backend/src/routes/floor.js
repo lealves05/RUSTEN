@@ -25,7 +25,9 @@ router.get('/tables', need('salao.visualizar'), h(async (req, res) => {
             (select count(*)::int from order_items i join consumption_sessions s on s.id = i.session_id
               where s.table_id = t.id and s.status in ('aberta','em_fechamento') and i.status = 'ativo' and i.kitchen_status in ('novo','aceito','preparando')) as preparing,
             (select count(*)::int from order_items i join consumption_sessions s on s.id = i.session_id
-              where s.table_id = t.id and s.status in ('aberta','em_fechamento') and i.status = 'ativo' and i.kitchen_status = 'pronto') as ready
+              where s.table_id = t.id and s.status in ('aberta','em_fechamento') and i.status = 'ativo' and i.kitchen_status = 'pronto') as ready,
+            (select string_agg(coalesce(s.customer_name, ''), ', ') filter (where s.customer_name is not null) from consumption_sessions s
+              where s.table_id = t.id and s.status in ('aberta','em_fechamento')) as customer_names
             ${showMoney ? `, (select coalesce(sum(i.total_cents),0)::bigint from order_items i join consumption_sessions s on s.id = i.session_id
               where s.table_id = t.id and s.status in ('aberta','em_fechamento') and i.status = 'ativo') as consumed_cents` : ''}
        from dining_tables t where t.company_id = $1 and t.unit_id = $2 and t.active order by t.number`, [req.ctx.companyId, unitId]);
@@ -69,8 +71,13 @@ router.get('/cards', need('pdv.lancar'), h(async (req, res) => {
   const { rows } = await q(
     `select c.id, c.number, c.status, c.block_reason,
             (select code from scan_codes s where s.company_id = c.company_id and s.entity = 'COMANDA' and s.entity_id = c.id order by s.id limit 1) as code,
-            (select s.id from consumption_sessions s where s.card_id = c.id and s.status in ('aberta','em_fechamento') limit 1) as session_id
-       from tab_cards c where c.company_id = $1 and c.unit_id = $2 order by c.number`, [req.ctx.companyId, unitId]);
+            s.id as session_id, s.customer_name, s.opened_at, s.status as session_status, t.number as table_number,
+            (select count(*)::int from order_items i where i.session_id = s.id and i.status = 'ativo') as item_count,
+            (select coalesce(sum(i.total_cents),0)::bigint from order_items i where i.session_id = s.id and i.status = 'ativo') as items_cents
+       from tab_cards c
+       left join lateral (select * from consumption_sessions s where s.card_id = c.id and s.status in ('aberta','em_fechamento') order by s.id desc limit 1) s on true
+       left join dining_tables t on t.id = s.table_id
+      where c.company_id = $1 and c.unit_id = $2 order by c.number`, [req.ctx.companyId, unitId]);
   res.json({ unitId, cards: rows });
 }));
 

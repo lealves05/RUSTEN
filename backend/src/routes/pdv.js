@@ -357,7 +357,12 @@ router.post('/sessions/:id/merge', need('pdv.transferir_item'), h(async (req, re
     const paid = await db.query("select 1 from payments where session_id = $1 and status = 'confirmado'", [id]);
     if (paid.rows[0]) throw conflict('Consumo com pagamento registrado não pode ser juntado; transfira os itens restantes', 'has_payments');
     const r = await transferItems(db, req.ctx, items, b.target_session_id, b.reason);
+    if (Number(b.target_session_id) === id) throw bad('Escolha um destino diferente da origem');
+    const src = (await db.query('select table_id, customer_name from consumption_sessions where id = $1', [id])).rows[0];
     await db.query("update consumption_sessions set status = 'cancelada', closed_at = now(), closed_by = $2, label = coalesce(label,'') || ' (juntada)' where id = $1", [id, req.ctx.userId]);
+    // destino sem nome herda o nome do cliente da origem; mesa da origem fica livre se não sobrou consumo nela
+    if (src.customer_name) await db.query('update consumption_sessions set customer_name = coalesce(customer_name, $2) where id = $1', [b.target_session_id, src.customer_name]);
+    if (src.table_id) await freeTableIfEmpty(db, src.table_id);
     return r;
   }));
 }));

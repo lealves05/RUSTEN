@@ -104,7 +104,7 @@ relatórios · recuperação de senha por e-mail (hoje: redefinição pelo propr
   (26 tabelas; nada do TORVEN foi alterado). O plano gratuito limita a 2 projetos, por isso não houve projeto próprio.
   Endereço: `https://dwfbxrfniarhufltmlhb.supabase.co/functions/v1/rusten-api` — `/api/health` respondendo OK.
   Ajustes para o Edge: `lib/env.js` (process.env é somente leitura), `Buffer` de `node:buffer`, `deno.json` com `npm:`.
-- **Site**: `frontend/.env.production` já aponta para a API. Falta hospedar na Vercel (exige login do Leandro):
-  na pasta `frontend`, `npx vercel --prod`, ou criar o repositório `RUSTEN` no GitHub e importar na Vercel (raiz `frontend`).
+- **Site no ar**: https://rusten.vercel.app (Vercel, projeto `rusten`, publicado em 01/10/2026 pelo `PUBLICAR-RUSTEN.bat`).
+  O npm global do Windows está corrompido (`Cannot find module './inventory.js'`); o script usa o Node portátil.
 - Commit local 22af563 (entregue como `RUSTEN.zip` e `rusten.bundle`).
 - Central: conferir o formato da assinatura com o `saas/hub.js` do ORBI antes de cadastrar o sistema `rusten` no Master.

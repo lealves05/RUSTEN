@@ -38,8 +38,9 @@ Testes: `DATABASE_URL=postgres://…/rusten_test npm run smoke` (em `backend/`; 
   `node scripts/build-edge.mjs` (sai em `backend/edge/index.js`). Variáveis: `SUPABASE_DB_URL` e `SUPABASE_SERVICE_ROLE_KEY`
   já existem no Supabase; `JWT_SECRET` é opcional (se ausente, a chave é derivada do segredo de serviço).
 - Migrações novas: aplicar no esquema `rusten` (`set local search_path to rusten`) — no Edge não há leitura de arquivos no boot.
-- **Site**: `frontend/.env.production` já aponta para a API acima. Na pasta `frontend`: `npx vercel --prod`
-  (ou importe o repositório na Vercel com *Root Directory* `frontend`).
+- **Site**: https://rusten.vercel.app (projeto `rusten` na equipe Vercel l2-r2). `frontend/.env.production` aponta para a API.
+  Republicar: duplo clique em `D:\Programacao\PUBLICAR-RUSTEN.bat` (usa o Node portátil de `D:\Programacao`, porque o npm
+  global do Windows está corrompido; registro em `RUSTEN\publicar-rusten.log`).
 
 ## Publicar (mesmo procedimento do ORBI)
 

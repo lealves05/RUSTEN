@@ -3,12 +3,13 @@ import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   Armchair, ChartColumn, Bell, Bike, BookOpen, ChefHat, House, LifeBuoy, LogOut, Megaphone, Menu, MessageCircle, Package,
-  PanelLeft, PanelLeftClose, ScanBarcode, Search, Settings, Users, Wallet, Wifi, WifiOff, X, Banknote,
+  PanelLeft, PanelLeftClose, ScanBarcode, Search, Settings, Users, Wallet, Wifi, WifiOff, X, Banknote, PlayCircle,
 } from 'lucide-react';
 import { useSession } from '../lib/session.jsx';
 import { api, terminal } from '../lib/api.js';
 import { Badge, Logo, Modal } from './ui.jsx';
 import { DemoBar } from './Activate.jsx';
+import { lessonFor } from '../lib/training.js';
 
 export const NAV = [
   { to: '/', label: 'Início', icon: House, end: true, tip: 'Resumo do dia' },
@@ -131,6 +132,10 @@ export default function Layout() {
               <span title={online ? 'Conectado ao servidor' : 'Sem conexão com o servidor'}>
                 {online ? <Badge tone="ok" icon={Wifi}>Online</Badge> : <Badge tone="bad" icon={WifiOff}>Offline</Badge>}
               </span>
+              {(() => { const l = lessonFor(loc.pathname); return l && !loc.pathname.startsWith('/suporte') ? (
+                <button onClick={() => nav(`/suporte?aula=${l.n}`)} className="hidden items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold text-copper hover:bg-raised md:inline-flex" title={`Vídeo-aula: ${l.title}`}>
+                  <PlayCircle size={16} /> Aula
+                </button>) : null; })()}
               <span className="relative" title={warning || 'Sem avisos'}>
                 <Bell size={19} className={warning ? 'text-warn' : 'text-muted'} aria-label="Notificações" />
                 {warning && <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-rust" />}

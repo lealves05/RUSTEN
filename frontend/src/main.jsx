@@ -26,6 +26,7 @@ const Delivery = lazy(() => import('./pages/Delivery.jsx'));
 const Marketing = lazy(() => import('./pages/Marketing.jsx'));
 const Agent = lazy(() => import('./pages/Agent.jsx'));
 const Reservations = lazy(() => import('./pages/Reservations.jsx'));
+const TvBoard = lazy(() => import('./pages/TvBoard.jsx'));
 const PublicPages = import('./pages/Public.jsx');
 const PublicMenu = lazy(() => PublicPages.then((m) => ({ default: m.PublicMenu })));
 const PublicOrder = lazy(() => PublicPages.then((m) => ({ default: m.PublicOrder })));
@@ -53,6 +54,7 @@ function App() {
       <Route path="/cadastro" element={s.me ? <Navigate to="/" replace /> : <Register />} />
       <Route path="/assinatura" element={s.loading ? <Loading /> : !s.me ? <Navigate to="/entrar" replace />
         : <Suspense fallback={<Loading />}><Subscription standalone /></Suspense>} />
+      <Route path="/painel-tv" element={<Guard>{L(<TvBoard />)}</Guard>} />
       <Route element={<Guard><Layout /></Guard>}>
         <Route index element={<Suspense fallback={<Loading />}><Home /></Suspense>} />
         <Route path="pdv" element={<Suspense fallback={<Loading />}><Pdv /></Suspense>} />

@@ -58,8 +58,10 @@ export const LESSONS = [
     desc: 'Satisfação dos clientes e campanhas só para quem consentiu.', learn: ['Avaliação pós-consumo por QR', 'Retorno às notas baixas', 'Campanhas segmentadas'] },
   { n: 20, file: '20-agente-whatsapp', mod: 'agente', s: 59, title: 'Agente de atendimento no WhatsApp', routes: ['/agente'],
     desc: 'Cardápio, preços, pedidos e reservas no WhatsApp, com passagem para a equipe.', learn: ['Testar no simulador', 'Pedido com resumo e confirmação', 'Caixa de entrada e integração oficial'] },
-  { n: 21, file: '21-lancar-nota-no-estoque', mod: 'estoque', s: 61, title: 'Lançar a nota no estoque (foto ou XML)', routes: [],
+  { n: 21, file: '21-lancar-nota-no-estoque', mod: 'estoque', s: 61, title: 'Lançar a nota no estoque (foto, XML ou manual)', routes: [],
     desc: 'Foto da nota ou XML da NF-e: o sistema lê, você confere e tudo entra no estoque.', learn: ['Fotografar ou importar o XML', 'Conferir e converter embalagens', 'O sistema aprende cada fornecedor'] },
+  { n: 22, file: '22-painel-da-tv', mod: 'cozinha', s: 82, title: 'Painel da TV: chamada dos pedidos', routes: ['/painel-tv'],
+    desc: 'A fila em preparo e a chamada em destaque, com som e voz, quando o pedido fica pronto.', learn: ['Abrir o painel numa TV', 'Chamada automática ao marcar Pronto', 'Fundo, som e tipo de letra'] },
 ];
 
 export const videoUrl = (l) => `/treinamento/${l.file}.mp4`;

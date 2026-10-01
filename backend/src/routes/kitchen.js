@@ -2,10 +2,11 @@
 // cancelamentos que exigem ciência do setor, prioridade autorizada e alerta de atraso.
 import { Router } from 'express';
 import { z } from 'zod';
-import { q, tx, h, parse, notFound, conflict } from '../lib/core.js';
+import { q, tx, h, parse, notFound, conflict, forbidden } from '../lib/core.js';
 import { need, audit, assertCan } from '../lib/auth.js';
 
 export const router = Router();
+const anyOf = (...perms) => (req, _res, next) => (perms.some((p) => req.ctx.can(p)) ? next() : next(forbidden('Sem permissão para o painel')));
 
 const FLOW = ['novo', 'aceito', 'preparando', 'pronto', 'entregue'];
 
@@ -127,4 +128,49 @@ router.get('/stats', need('cozinha.operar'), h(async (req, res) => {
      from order_items i join production_sectors ps on ps.id = i.sector_id
     where i.company_id = $1 and i.ready_at is not null and i.sent_at > now() - interval '24 hours' group by ps.name order by ps.name`, [req.ctx.companyId])).rows;
   res.json(r);
+}));
+
+/* Painel da TV (retirada): pedidos em preparo e prontos, por comanda/mesa/pedido.
+   Mostra só número, primeiro nome e itens — nada de valores. */
+router.get('/board', anyOf('pdv.lancar', 'cozinha.operar'), h(async (req, res) => {
+  const unit = req.ctx.terminalUnitId || req.ctx.unitId;
+  const params = [req.ctx.companyId];
+  let unitF = '';
+  if (unit) { params.push(unit); unitF = ` and s.unit_id = $${params.length}`; }
+  const rows = (await q(`
+    select s.id, s.kind, s.label, s.customer_name, c.number as card_number, t.number as table_number, d.number as delivery_number, d.mode as delivery_mode,
+           count(*) filter (where i.kitchen_status in ('novo','aceito','preparando'))::int as pending,
+           count(*) filter (where i.kitchen_status = 'pronto')::int as ready,
+           min(i.sent_at) as sent_at, max(i.ready_at) as ready_at,
+           coalesce(json_agg(json_build_object('d', i.description, 'q', i.qty, 's', i.kitchen_status) order by i.id), '[]') as items,
+           (select max(e.created_at) from kitchen_events e join order_items i2 on i2.id = e.item_id where i2.session_id = s.id and e.to_status = 'chamado') as called_at
+      from order_items i join consumption_sessions s on s.id = i.session_id
+      left join tab_cards c on c.id = s.card_id left join dining_tables t on t.id = s.table_id left join delivery_orders d on d.session_id = s.id
+     where i.company_id = $1${unitF} and i.status = 'ativo' and i.sent_at is not null and i.kitchen_status in ('novo','aceito','preparando','pronto')
+       and s.status in ('aberta','em_fechamento') and coalesce(d.status, '') not in ('saiu','entregue','cancelado')
+     group by s.id, c.number, t.number, d.number, d.mode
+     order by min(i.sent_at)
+     limit 120`, params)).rows;
+  const first = (n) => (n ? String(n).trim().split(/\s+/)[0] : null);
+  res.set('cache-control', 'no-store');
+  res.json({ now: new Date().toISOString(), orders: rows.map((r) => ({
+    id: r.id,
+    code: r.delivery_number ? `#${r.delivery_number}` : r.card_number ? String(r.card_number) : r.table_number ? String(r.table_number) : String(r.id),
+    kind: r.delivery_number ? (r.delivery_mode === 'retirada' ? 'retirada' : 'delivery') : r.card_number ? 'comanda' : r.table_number ? 'mesa' : r.kind,
+    table: r.card_number && r.table_number ? r.table_number : null,
+    name: first(r.customer_name),
+    status: r.pending > 0 ? 'preparando' : 'pronto',
+    partial: r.pending > 0 && r.ready > 0,
+    sent_at: r.sent_at, ready_at: r.ready_at, called_at: r.called_at,
+    items: r.items.map((x) => ({ d: x.d, q: Number(x.q), ready: x.s === 'pronto' })),
+  })) });
+}));
+
+// Chamar de novo no painel (ex.: cliente não veio buscar)
+router.post('/sessions/:id/call', anyOf('pdv.lancar', 'cozinha.operar'), h(async (req, res) => {
+  const it = (await q(`select id from order_items where session_id = $1 and company_id = $2 and status = 'ativo' and kitchen_status = 'pronto' order by id desc limit 1`,
+    [Number(req.params.id), req.ctx.companyId])).rows[0];
+  if (!it) throw conflict('Nenhum item pronto neste pedido', 'nothing_ready');
+  await q(`insert into kitchen_events (company_id, item_id, from_status, to_status, user_id) values ($1,$2,'pronto','chamado',$3)`, [req.ctx.companyId, it.id, req.ctx.userId]);
+  res.json({ ok: true });
 }));

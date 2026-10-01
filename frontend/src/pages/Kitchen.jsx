@@ -1,7 +1,7 @@
 // KDS — filas de produção por setor: NOVO → ACEITO → PREPARANDO → PRONTO → ENTREGUE.
 // Atualiza sozinho; ao reconectar, recarrega a fila inteira (nenhum item reconhecido volta a "novo").
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, BellRing, ChefHat, Flame, Maximize2, Volume2, VolumeX } from 'lucide-react';
+import { AlertTriangle, BellRing, ChefHat, Flame, Maximize2, Megaphone, Tv, Volume2, VolumeX } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
 import { Badge, Empty, ErrorBox, Loading, PageHeader, useToast } from '../components/ui.jsx';
@@ -42,6 +42,7 @@ export default function Kitchen() {
     try { await api(`/api/kitchen/items/${item.id}/status`, { method: 'POST', body: { to, from: item.kitchen_status } }); load(); }
     catch (e) { toast(e.message, e.code === 'status_changed' ? 'warn' : 'bad'); load(); }
   };
+  const call = async (g) => { try { await api(`/api/kitchen/sessions/${g.session_id}/call`, { method: 'POST' }); toast(`${g.origin} chamado no painel`); } catch (e) { toast(e.message, 'bad'); } };
   const ack = async (item) => { await api(`/api/kitchen/items/${item.id}/ack-cancel`, { method: 'POST' }).catch(() => {}); load(); };
   const priority = async (item) => {
     const reason = prompt(item.priority ? 'Motivo para tirar a prioridade:' : 'Motivo da prioridade (ex.: cliente com pressa, refazer prato):'); if (!reason) return;
@@ -70,9 +71,10 @@ export default function Kitchen() {
   const mins = (t) => Math.max(0, Math.floor((now - new Date(t).getTime()) / 60000));
   return (
     <div>
-      <PageHeader title="Cozinha" subtitle="Fila de produção em tempo real. Toque no botão do item para avançar a etapa."
+      <PageHeader title="Cozinha" subtitle="Fila de produção em tempo real. Ao marcar Pronto, o pedido aparece em destaque no Painel da TV, com som."
         actions={<>
           <button className="btn-ghost" onClick={() => { const v = !sound; setSound(v); localStorage.setItem('rusten.kds.sound', v ? 'on' : 'off'); }} aria-pressed={sound}>{sound ? <Volume2 size={16} /> : <VolumeX size={16} />} Som</button>
+          <a className="btn-ghost" href="/painel-tv" target="_blank" rel="noreferrer" title="Abra numa TV ou monitor voltado para os clientes"><Tv size={16} /> Painel da TV</a>
           <button className="btn-ghost" onClick={() => document.documentElement.requestFullscreen?.()}><Maximize2 size={16} /> Tela cheia</button>
         </>} />
       <div className="mb-3 flex flex-wrap gap-1">
@@ -109,7 +111,8 @@ export default function Kitchen() {
                     <article key={g.key} data-kds-order={g.session_id} className={`card overflow-hidden ${late ? 'border-2 border-rust' : g.priority ? 'border-2 border-warn' : ''}`}>
                       <header className={`flex items-center justify-between px-3 py-2 ${late ? 'bg-rust text-white' : 'bg-raised'}`}>
                         <div><div className="font-display text-xl leading-none">{g.origin}</div>{g.customer && <div className="text-xs opacity-80">{g.customer}</div>}</div>
-                        <div className="text-right text-sm font-bold">{g.priority && <Flame size={14} className="inline text-warn" />} {m} min{late && <div className="text-[10px] uppercase">atrasado</div>}</div>
+                        <div className="text-right text-sm font-bold">{g.priority && <Flame size={14} className="inline text-warn" />} {m} min{late && <div className="text-[10px] uppercase">atrasado</div>}
+                          {c === 'pronto' && <button className="mt-1 block rounded bg-copper px-2 py-0.5 text-[11px] font-bold uppercase text-white dark:text-black" onClick={() => call(g)} title="Chama de novo no painel da TV"><Megaphone size={11} className="inline" /> chamar</button>}</div>
                       </header>
                       <ul className="divide-y divide-line">
                         {g.items.map((i) => (

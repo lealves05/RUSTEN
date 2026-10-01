@@ -14,10 +14,13 @@ export async function migrate({ log = console.log } = {}) {
     await client.query(`create table if not exists schema_migrations (
       name text primary key, applied_at timestamptz not null default now())`);
     const done = new Set((await client.query('select name from schema_migrations')).rows.map((r) => r.name));
-    const files = fs.readdirSync(dir).filter((f) => /^\d+_.+\.sql$/.test(f)).sort();
-    for (const f of files) {
+    // na Edge Function não há arquivos: usa as migrações embutidas (scripts/embed-migrations.mjs)
+    const list = env.EDGE_RUNTIME
+      ? (await import('./migrations.gen.js')).MIGRATIONS
+      : fs.readdirSync(dir).filter((f) => /^\d+_.+\.sql$/.test(f)).sort().map((name) => ({ name, sql: null }));
+    for (const { name: f, sql: embedded } of list) {
       if (done.has(f)) continue;
-      const sql = fs.readFileSync(path.join(dir, f), 'utf8');
+      const sql = embedded ?? fs.readFileSync(path.join(dir, f), 'utf8');
       await client.query('begin');
       try {
         await client.query(sql);

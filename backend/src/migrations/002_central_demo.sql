@@ -60,3 +60,4 @@ begin
   delete from companies where id = p_company;
   perform set_config('rusten.purge_demo', '', true);
 end $$;
+revoke all on function purge_demo_company(bigint) from public;

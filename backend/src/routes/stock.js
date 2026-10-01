@@ -3,7 +3,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { q, tx, h, parse, bad, notFound, conflict } from '../lib/core.js';
-import { need, audit, assertCan } from '../lib/auth.js';
+import { need, audit, assertCan, rateLimit } from '../lib/auth.js';
+import { readImage, matchLines, aliasKey, aiAvailable } from '../lib/notes.js';
 import { balances, receive, theoreticalCost, requirements, stockConfig } from '../lib/stock.js';
 
 export const router = Router();
@@ -299,4 +300,84 @@ router.put('/settings', need('configuracoes.gerenciar'), h(async (req, res) => {
   await q(`update companies set settings = jsonb_set(settings, '{stock}', $2::jsonb) where id = $1`, [req.ctx.companyId, JSON.stringify(b)]);
   await audit({ query: q }, req.ctx, 'estoque.politica', { data: b });
   res.json({ ok: true });
+}));
+
+// ---- Leitura de notas: foto (IA de visão) ou XML da NF-e → conferência → compra recebida no estoque ----
+router.get('/notes/status', need('compras.gerenciar'), h(async (req, res) => {
+  const own = (await q("select 1 from company_secrets where company_id = $1 and key = 'ai_api_key'", [req.ctx.companyId])).rows[0];
+  res.json({ photo: await aiAvailable(req.ctx.companyId), own_key: !!own });
+}));
+
+router.put('/notes/key', need('compras.gerenciar', 'configuracoes.gerenciar'), h(async (req, res) => {
+  const b = parse(z.object({ api_key: z.string().trim().max(300) }), req.body);
+  if (b.api_key && !/^sk-ant-[A-Za-z0-9_-]{20,}$/.test(b.api_key)) throw bad('Chave inválida: ela começa com "sk-ant-"');
+  if (!b.api_key) await q("delete from company_secrets where company_id = $1 and key = 'ai_api_key'", [req.ctx.companyId]);
+  else await q(`insert into company_secrets (company_id, key, value) values ($1,'ai_api_key',$2) on conflict (company_id, key) do update set value = excluded.value, updated_at = now()`, [req.ctx.companyId, b.api_key]);
+  await audit({ query: q }, req.ctx, 'estoque.leitura_chave', { data: { removed: !b.api_key } });
+  res.json({ ok: true });
+}));
+
+router.post('/notes/read', need('compras.gerenciar'), h(async (req, res) => {
+  const b = parse(z.object({ image: z.string().max(9_000_000) }), req.body);
+  await rateLimit(`notes:${req.ctx.companyId}`, 60, 3600);
+  const doc = await readImage(req.ctx.companyId, b.image);
+  res.json({ ...doc, items: await matchLines(req.ctx.companyId, doc.items) });
+}));
+
+router.post('/notes/match', need('compras.gerenciar'), h(async (req, res) => {
+  const b = parse(z.object({ items: z.array(z.object({ description: z.string().max(120), qty: z.number().nullable().optional(), unit: z.string().max(10).nullable().optional(),
+    unit_price: z.number().nullable().optional(), total: z.number().nullable().optional() })).max(300) }), req.body);
+  res.json({ items: await matchLines(req.ctx.companyId, b.items) });
+}));
+
+router.post('/notes/confirm', need('compras.gerenciar'), h(async (req, res) => {
+  const b = parse(z.object({
+    supplier: z.string().trim().min(2).max(100), document: z.string().trim().max(60).optional().nullable(), due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
+    source: z.enum(['foto', 'xml']), nfe_key: z.string().regex(/^\d{44}$/).optional().nullable(), receive: z.boolean().default(true),
+    lines: z.array(z.object({
+      description: z.string().max(120), alias: z.string().max(120).optional(),
+      stock_item_id: z.number().int().optional().nullable(),
+      new_item: z.object({ name: z.string().trim().min(2).max(80), unit: z.enum(['un', 'kg', 'g', 'L', 'ml']), min_qty: z.number().min(0).max(1000000).default(0) }).optional().nullable(),
+      qty: z.number().positive().max(1000000), factor: z.number().positive().max(10000).default(1), unit_cost_cents: z.number().int().min(0).max(100000000),
+    })).min(1).max(150),
+  }), req.body);
+  const out = await tx(async (db) => {
+    if (b.nfe_key) {
+      const dup = (await db.query("select id from purchases where company_id = $1 and nfe_key = $2 and status <> 'cancelada'", [req.ctx.companyId, b.nfe_key])).rows[0];
+      if (dup) throw conflict(`Esta NF-e já foi lançada (compra #${dup.id})`, 'nfe_duplicate');
+    }
+    const resolved = [];
+    for (const l of b.lines) {
+      let id = l.stock_item_id;
+      if (!id && l.new_item) {
+        const ex = (await db.query('select id from stock_items where company_id = $1 and lower(name) = lower($2)', [req.ctx.companyId, l.new_item.name])).rows[0];
+        id = ex?.id ?? (await db.query('insert into stock_items (company_id, name, unit, min_qty, reorder_qty) values ($1,$2,$3,$4,$5) returning id',
+          [req.ctx.companyId, l.new_item.name, l.new_item.unit, l.new_item.min_qty, l.new_item.min_qty * 3])).rows[0].id;
+      }
+      if (!id) throw bad(`Escolha o insumo de "${l.description}" ou marque para criar`);
+      const ok = (await db.query('select 1 from stock_items where id = $1 and company_id = $2', [id, req.ctx.companyId])).rows[0];
+      if (!ok) throw bad('Insumo inválido');
+      // quantidade e custo convertidos para a unidade do estoque (ex.: 2 caixas × 12 = 24 un)
+      resolved.push({ ...l, stock_item_id: Number(id), stock_qty: Math.round(l.qty * l.factor * 1000) / 1000, stock_cost: Math.round(l.unit_cost_cents / l.factor) });
+    }
+    const total = b.lines.reduce((s, l) => s + Math.round(l.qty * l.unit_cost_cents), 0);
+    const p = (await db.query(`insert into purchases (company_id, supplier, document, due_date, total_cents, created_by, source, nfe_key, notes)
+      values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`, [req.ctx.companyId, b.supplier, b.document ?? null, b.due_date ?? null, total, req.ctx.userId, b.source, b.nfe_key ?? null,
+      b.source === 'foto' ? 'Lançada pela foto da nota (conferida)' : 'Importada do XML da NF-e'])).rows[0];
+    for (const l of resolved) {
+      const pl = (await db.query('insert into purchase_lines (company_id, purchase_id, stock_item_id, qty, unit_cost_cents) values ($1,$2,$3,$4,$5) returning id',
+        [req.ctx.companyId, p.id, l.stock_item_id, l.stock_qty, l.stock_cost])).rows[0];
+      if (b.receive) {
+        await db.query('update purchase_lines set received_qty = qty where id = $1', [pl.id]);
+        await receive(db, req.ctx, l.stock_item_id, l.stock_qty, l.stock_cost, { type: 'purchase', id: p.id }, `Compra ${p.id} — ${b.supplier}`);
+      }
+      const alias = aliasKey(l.alias || l.description);
+      if (alias) await db.query(`insert into stock_aliases (company_id, alias, stock_item_id, factor) values ($1,$2,$3,$4)
+        on conflict (company_id, alias) do update set stock_item_id = excluded.stock_item_id, factor = excluded.factor, updated_at = now()`, [req.ctx.companyId, alias, l.stock_item_id, l.factor]);
+    }
+    if (b.receive) await db.query("update purchases set status = 'recebida' where id = $1", [p.id]);
+    await audit(db, req.ctx, 'compra.nota_lancada', { entity: 'purchase', entityId: p.id, data: { source: b.source, lines: resolved.length, total_cents: total, received: b.receive } });
+    return { purchase_id: p.id, lines: resolved.length, total_cents: total, received: b.receive };
+  }).catch((e) => { if (e.code === '23505') throw conflict('Esta NF-e já foi lançada', 'nfe_duplicate'); throw e; });
+  res.status(201).json(out);
 }));

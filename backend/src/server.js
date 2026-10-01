@@ -38,6 +38,8 @@ export function createApp() {
   app.use(cors({ origin: (o, cb) => cb(null, allowed(o)), credentials: false,
     allowedHeaders: ['content-type', 'authorization', 'x-terminal-id'] }));
   // Corpo cru preservado para conferir assinaturas da central
+  // foto da nota fiscal (até ~6 MB em base64) só nesta rota
+  app.use('/api/stock/notes/read', express.json({ limit: '9mb' }));
   app.use(express.json({ limit: '1mb', verify: (req, _res, buf) => { req.rawBody = buf.toString('utf8'); } }));
 
   app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'rusten-api' }));

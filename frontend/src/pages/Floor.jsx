@@ -1,6 +1,7 @@
 // Salão: mapa de mesas e cartões de comanda (gerar em lote, imprimir relação, bloquear, substituir).
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import ReviewLinkModal from '../components/ReviewLink.jsx';
 import { Armchair, CalendarDays, ChefHat, CircleDot, LayoutGrid, List, Lock, Merge, Printer, Unlock } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { money, time } from '../lib/format.js';
@@ -13,7 +14,9 @@ const STATUS = {
 
 export default function Floor() {
   const s = useSession();
-  const [tab, setTab] = useState('mesas');
+  const [params, setParams] = useSearchParams();
+  const [tab, setTab] = useState(params.get('aba') === 'comandas' ? 'comandas' : 'mesas');
+  const review = Number(params.get('avaliar')) || null;
   return (
     <div>
       <PageHeader title="Salão" subtitle="Mesas, ocupação e cartões de comanda" actions={<Link className="btn-ghost" to="/salao/reservas"><CalendarDays size={16} /> Reservas</Link>} />
@@ -23,6 +26,7 @@ export default function Floor() {
         ))}
       </div>
       {tab === 'mesas' ? <Tables s={s} /> : <Cards s={s} />}
+      <ReviewLinkModal sessionId={review} onClose={() => setParams({ aba: tab }, { replace: true })} />
     </div>
   );
 }

@@ -1,6 +1,6 @@
 // Estoque: insumos e saldos, fichas técnicas versionadas, compras com recebimento parcial, inventário e produção.
 import { useEffect, useState } from 'react';
-import { ClipboardCheck, Package, Plus, ShoppingCart, Trash2 } from 'lucide-react';
+import { Camera, CheckCircle2, ClipboardCheck, FileCode2, KeyRound, Loader2, Package, Plus, ShoppingCart, Trash2 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { money, dateTime, parseCents, centsToInput } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
@@ -10,7 +10,7 @@ const UNITS = ['un', 'kg', 'g', 'L', 'ml'];
 const num = (v) => Number(String(v).replace(',', '.'));
 const qfmt = (n, u) => `${Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 3 })} ${u}`;
 const MOV = { entrada: 'Entrada', venda: 'Venda', estorno_venda: 'Estorno de venda', perda: 'Perda', ajuste: 'Ajuste', inventario: 'Inventário', producao_consumo: 'Produção (consumo)', producao_entrada: 'Produção (entrada)', reversao: 'Reversão' };
-const TABS = [['insumos', 'Insumos'], ['fichas', 'Fichas técnicas'], ['compras', 'Compras'], ['inventario', 'Inventário']];
+const TABS = [['nota', 'Lançar nota'], ['insumos', 'Insumos'], ['fichas', 'Fichas técnicas'], ['compras', 'Compras'], ['inventario', 'Inventário']];
 
 export default function Stock() {
   const [tab, setTab] = useState('insumos');
@@ -23,6 +23,7 @@ export default function Stock() {
           className={`whitespace-nowrap border-b-2 px-4 py-2 text-sm font-semibold uppercase tracking-wide ${tab === k ? 'border-copper text-copper' : 'border-transparent text-muted hover:text-ink'}`}>{l}</button>)}
       </div>
       {items.error && <ErrorBox error={items.error} onRetry={items.reload} />}
+      {tab === 'nota' && <NoteImport stock={items.data || []} onDone={() => { items.reload(); setTab('insumos'); }} />}
       {tab === 'insumos' && <Items items={items} />}
       {tab === 'fichas' && <Recipes stock={items.data || []} />}
       {tab === 'compras' && <Purchases stock={items.data || []} onChanged={items.reload} />}
@@ -398,6 +399,161 @@ function Inventory({ stock, onChanged }) {
               {s.can('relatorios.cmv') && <td className="text-right">{money(l.value_cents)}</td>}</tr>)}</tbody></table>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ---- Lançar nota: foto (lida por IA) ou XML da NF-e → conferência → entrada no estoque ----
+async function shrink(file) {
+  if (file.type === 'application/pdf') {
+    if (file.size > 6_000_000) throw new Error('PDF muito grande (máx. 6 MB)');
+    return new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(file); });
+  }
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(1, 1800 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas'); c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.85);
+}
+
+function parseNfe(xml) {
+  const d = new DOMParser().parseFromString(xml, 'application/xml');
+  if (d.querySelector('parsererror')) throw new Error('Arquivo XML inválido');
+  const g = (el, tag) => el?.getElementsByTagName(tag)?.[0]?.textContent?.trim() || null;
+  const inf = d.getElementsByTagName('infNFe')[0];
+  if (!inf) throw new Error('Este XML não é de uma NF-e');
+  const key = (inf.getAttribute('Id') || '').replace(/^NFe/, '');
+  const emit = d.getElementsByTagName('emit')[0];
+  const items = [...d.getElementsByTagName('det')].map((det) => {
+    const p = det.getElementsByTagName('prod')[0];
+    return { description: g(p, 'xProd'), qty: Number(g(p, 'qCom')), unit: g(p, 'uCom'), unit_price: Number(g(p, 'vUnCom')), total: Number(g(p, 'vProd')) };
+  }).filter((i) => i.description);
+  return { supplier: g(emit, 'xFant') || g(emit, 'xNome'), document: g(d, 'nNF') ? `NF-e ${g(d, 'nNF')}` : null, nfe_key: /^\d{44}$/.test(key) ? key : null,
+    due_date: g(d.getElementsByTagName('dup')[0], 'dVenc'), total: Number(g(d.getElementsByTagName('ICMSTot')[0], 'vNF')) || null, items, warnings: [] };
+}
+
+function NoteImport({ stock, onDone }) {
+  const s = useSession();
+  const toast = useToast();
+  const status = useLoad(() => api('/api/stock/notes/status'), []);
+  const [busy, setBusy] = useState(null);
+  const [err, setErr] = useState(null);
+  const [doc, setDoc] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [key, setKey] = useState('');
+  const toLines = (items) => items.map((i) => ({ description: i.description, alias: i.alias, match: i.match, note_unit: i.unit || '', qty: String(i.qty ?? '').replace('.', ','),
+    factor: String(i.factor || 1).replace('.', ','), cost: i.unit_price != null ? centsToInput(Math.round(i.unit_price * 100)) : '',
+    target: i.stock_item_id ? String(i.stock_item_id) : 'novo', new_name: i.description.replace(/\s+/g, ' ').slice(0, 60), new_unit: i.suggested_unit || 'un' }));
+  const photo = async (e) => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    setErr(null); setDoc(null); setBusy('Lendo a nota…');
+    try {
+      const data = await shrink(f); setPreview(f.type === 'application/pdf' ? null : data);
+      const r = await api('/api/stock/notes/read', { method: 'POST', body: { image: data } });
+      setDoc({ ...r, source: 'foto', lines: toLines(r.items) });
+    } catch (x) { setErr(x); } finally { setBusy(null); }
+  };
+  const xml = async (e) => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    setErr(null); setDoc(null); setPreview(null); setBusy('Lendo o XML…');
+    try {
+      const n = parseNfe(await f.text());
+      const r = await api('/api/stock/notes/match', { method: 'POST', body: { items: n.items } });
+      setDoc({ ...n, source: 'xml', lines: toLines(r.items) });
+    } catch (x) { setErr(x); } finally { setBusy(null); }
+  };
+  const saveKey = async () => { try { await api('/api/stock/notes/key', { method: 'PUT', body: { api_key: key } }); setKey(''); status.reload(); toast('Leitura por foto ativada'); } catch (x) { toast(x.message, 'bad'); } };
+  const setLine = (i, patch) => setDoc({ ...doc, lines: doc.lines.map((l, j) => (j === i ? { ...l, ...patch } : l)) });
+  const total = doc ? doc.lines.reduce((a, l) => a + Math.round(num(l.qty || 0) * (parseCents(l.cost || '0') || 0)), 0) : 0;
+  const confirm = async () => {
+    setErr(null); setBusy('Lançando no estoque…');
+    try {
+      const r = await api('/api/stock/notes/confirm', { method: 'POST', body: { supplier: doc.supplier || '', document: doc.document || null, due_date: doc.due_date || null,
+        source: doc.source, nfe_key: doc.nfe_key || null, receive: true,
+        lines: doc.lines.map((l) => ({ description: l.description, alias: l.alias, qty: num(l.qty), factor: num(l.factor) || 1, unit_cost_cents: parseCents(l.cost || '0') ?? 0,
+          stock_item_id: l.target !== 'novo' ? Number(l.target) : null, new_item: l.target === 'novo' ? { name: l.new_name, unit: l.new_unit } : null })) } });
+      toast(`Compra #${r.purchase_id} lançada: ${r.lines} item(ns) entraram no estoque`); setDoc(null); setPreview(null); onDone();
+    } catch (x) { setErr(x); } finally { setBusy(null); }
+  };
+  if (!s.can('compras.gerenciar')) return <Empty icon={Camera} title="Sem permissão">Peça ao gerente o perfil com "Registrar compras e recebimentos".</Empty>;
+  return (
+    <div className="space-y-4">
+      {!doc && (
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className={`card flex cursor-pointer flex-col items-center gap-2 p-6 text-center hover:border-copper ${!status.data?.photo ? 'opacity-60' : ''}`}>
+            <Camera size={36} className="text-copper" />
+            <span className="font-display text-2xl">Fotografar nota ou pedido</span>
+            <span className="text-sm text-muted">Nota fiscal, cupom, pedido do fornecedor ou lista à mão. O sistema lê os itens, quantidades e preços — você confere antes de lançar.</span>
+            <input type="file" accept="image/*,application/pdf" capture="environment" className="sr-only" onChange={photo} disabled={!!busy || !status.data?.photo} data-note-photo />
+            {status.data && !status.data.photo && <span className="text-xs text-warn">Leitura por foto ainda não configurada (veja abaixo).</span>}
+          </label>
+          <label className="card flex cursor-pointer flex-col items-center gap-2 p-6 text-center hover:border-copper">
+            <FileCode2 size={36} className="text-copper" />
+            <span className="font-display text-2xl">Importar XML da NF-e</span>
+            <span className="text-sm text-muted">O arquivo .xml que o fornecedor envia por e-mail. Leitura exata, sem IA, e a mesma nota não entra duas vezes.</span>
+            <input type="file" accept=".xml,text/xml,application/xml" className="sr-only" onChange={xml} disabled={!!busy} data-note-xml />
+          </label>
+        </div>
+      )}
+      {busy && <div className="flex items-center gap-2 text-muted"><Loader2 className="animate-spin" size={18} /> {busy}</div>}
+      <ErrorBox error={err} />
+      {doc && (
+        <div className="card p-4">
+          <div className="flex flex-wrap items-start gap-4">
+            {preview && <img src={preview} alt="Foto da nota" className="h-40 w-32 rounded border border-line object-cover" />}
+            <div className="grid flex-1 gap-3 sm:grid-cols-3">
+              <Field label="Fornecedor"><input className="input" value={doc.supplier || ''} onChange={(e) => setDoc({ ...doc, supplier: e.target.value })} /></Field>
+              <Field label="Documento"><input className="input" value={doc.document || ''} onChange={(e) => setDoc({ ...doc, document: e.target.value })} /></Field>
+              <Field label="Vencimento (a pagar)"><input className="input" type="date" value={doc.due_date || ''} onChange={(e) => setDoc({ ...doc, due_date: e.target.value })} /></Field>
+            </div>
+          </div>
+          {!!doc.warnings?.length && <div className="mt-3 rounded-lg border border-warn/40 bg-warn/10 p-2 text-sm">{doc.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}</div>}
+          <p className="mt-3 text-sm text-muted">Confira cada linha. Em <b>por embalagem</b>, informe quantas unidades do estoque vêm em cada unidade da nota (ex.: caixa com 12). O sistema lembra a escolha na próxima nota deste fornecedor.</p>
+          <div className="mt-2 overflow-x-auto">
+            <table className="table-clean">
+              <thead><tr><th>Na nota</th><th className="w-20">Qtd</th><th className="w-24">Por embalagem</th><th>Vai para o insumo</th><th className="w-28">R$ unit. (nota)</th><th className="text-right">Total</th><th /></tr></thead>
+              <tbody>{doc.lines.map((l, i) => {
+                const it = stock.find((x) => String(x.id) === l.target);
+                const qtyStock = num(l.qty || 0) * (num(l.factor) || 1);
+                return (
+                  <tr key={i} data-note-line={i}>
+                    <td className="max-w-[220px]"><div className="font-semibold">{l.description}</div><div className="text-xs text-muted">{l.note_unit}{l.match === 'aprendido' ? ' · reconhecido' : l.match === 'semelhante' ? ' · sugerido' : ''}</div></td>
+                    <td><input className="input px-2" inputMode="decimal" value={l.qty} onChange={(e) => setLine(i, { qty: e.target.value })} aria-label="Quantidade" /></td>
+                    <td><input className="input px-2" inputMode="decimal" value={l.factor} onChange={(e) => setLine(i, { factor: e.target.value })} aria-label="Unidades por embalagem" /></td>
+                    <td>
+                      <select className="input" value={l.target} onChange={(e) => setLine(i, { target: e.target.value })} aria-label="Insumo">
+                        <option value="novo">+ Criar insumo novo</option>{stock.map((x) => <option key={x.id} value={x.id}>{x.name} ({x.unit})</option>)}</select>
+                      {l.target === 'novo' && <div className="mt-1 flex gap-1"><input className="input py-1 text-sm" value={l.new_name} onChange={(e) => setLine(i, { new_name: e.target.value })} aria-label="Nome do novo insumo" />
+                        <select className="input w-20 py-1 text-sm" value={l.new_unit} onChange={(e) => setLine(i, { new_unit: e.target.value })} aria-label="Unidade">{UNITS.map((u) => <option key={u}>{u}</option>)}</select></div>}
+                      <div className="text-xs text-muted">Entra: {qfmt(qtyStock, it?.unit || l.new_unit)}</div>
+                    </td>
+                    <td><input className="input px-2" inputMode="decimal" value={l.cost} onChange={(e) => setLine(i, { cost: e.target.value })} aria-label="Preço unitário" /></td>
+                    <td className="text-right">{money(Math.round(num(l.qty || 0) * (parseCents(l.cost || '0') || 0)))}</td>
+                    <td><button onClick={() => setDoc({ ...doc, lines: doc.lines.filter((_, j) => j !== i) })} aria-label="Remover linha"><Trash2 size={14} /></button></td>
+                  </tr>
+                );
+              })}</tbody>
+            </table>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <span className="font-display text-2xl">Total {money(total)}</span>
+            {doc.total != null && Math.abs(Math.round(doc.total * 100) - total) > 1 && <span className="text-sm text-warn">A nota diz {money(Math.round(doc.total * 100))} — confira quantidades e preços (frete e descontos não entram).</span>}
+            <div className="ml-auto flex gap-2">
+              <button className="btn-ghost" onClick={() => { setDoc(null); setPreview(null); }}>Descartar</button>
+              <button className="btn-primary" disabled={!!busy || !doc.lines.length || (doc.supplier || '').trim().length < 2} onClick={confirm} data-note-confirm><CheckCircle2 size={16} /> Lançar no estoque</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {status.data && s.can('configuracoes.gerenciar') && !doc && (
+        <div className="card p-4 text-sm">
+          <h3 className="flex items-center gap-2 font-display text-xl"><KeyRound size={18} /> Leitura por foto</h3>
+          {status.data.photo ? <p className="mt-1 text-muted">Ativa{status.data.own_key ? ' com a chave desta empresa' : ' pela plataforma'}. As fotos são lidas pela IA Claude (Anthropic) e não ficam guardadas.</p>
+            : <p className="mt-1 text-muted">Para ler fotos, informe uma chave da API da Anthropic (console.anthropic.com). Sem ela, use o XML da NF-e.</p>}
+          <div className="mt-2 flex gap-2"><input className="input max-w-md font-mono" type="password" autoComplete="off" placeholder={status.data.own_key ? 'manter a chave atual' : 'sk-ant-…'} value={key} onChange={(e) => setKey(e.target.value)} />
+            <button className="btn-ghost" disabled={!key} onClick={saveKey}>Salvar chave</button></div>
+        </div>
+      )}
     </div>
   );
 }

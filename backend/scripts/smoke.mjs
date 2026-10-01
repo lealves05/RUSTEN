@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 
 import http from 'node:http';
+import { Buffer } from 'node:buffer';
 process.env.PLATFORM_SECRET = 'pk_segredo-de-teste-da-central-0123456789';
 process.env.NODE_ENV = 'test';
 
@@ -730,6 +731,43 @@ await check('agente: simulador monta pedido sem criar venda; webhook exige assin
   const convs = (await apiC('GET', '/api/agent/conversations')).data;
   const conv = (await apiC('GET', `/api/agent/conversations/${convs[0].id}`)).data;
   assert.equal(conv.messages.filter((m) => m.direction === 'in').length, 1, 'webhook reentregue não duplica');
+});
+await check('nota por foto: sem chave avisa; com leitura, confere, cria insumo, recebe e aprende o apelido', async () => {
+  const img = 'data:image/jpeg;base64,' + Buffer.from('foto-de-teste').toString('base64');
+  const off = await apiC('POST', '/api/stock/notes/read', { image: img });
+  assert.equal(off.status, 503); assert.equal(off.data.code, 'ai_not_configured');
+  // serviço de visão falso: devolve a nota como o modelo devolveria
+  const fake = http.createServer((rq, rs) => { let b = ''; rq.on('data', (c) => { b += c; }); rq.on('end', () => {
+    const body = JSON.parse(b); assert.equal(rq.headers['x-api-key'], 'sk-ant-teste-0000000000000000000000'); assert.equal(body.messages[0].content[0].type, 'image');
+    rs.writeHead(200, { 'content-type': 'application/json' });
+    rs.end(JSON.stringify({ content: [{ type: 'text', text: 'Aqui está: {"supplier":"Atacadão Bebidas","document":"NF 1234","date":"2026-09-30","total":186.0,"items":[{"description":"CARNE MOIDA BOV KG","qty":2,"unit":"KG","unit_price":33.0,"total":66.0},{"description":"CERV PILSEN LN 355ML CX12","qty":2,"unit":"CX","unit_price":60.0,"total":120.0}],"warnings":[]}' }] }));
+  }); });
+  await new Promise((r) => fake.listen(0, '127.0.0.1', r));
+  process.env.AI_API_URL = `http://127.0.0.1:${fake.address().port}`;
+  assert.equal((await apiC('PUT', '/api/stock/notes/key', { api_key: 'sk-ant-teste-0000000000000000000000' })).status, 200);
+  assert.equal((await apiC('GET', '/api/stock/notes/status')).data.photo, true);
+  const r = await apiC('POST', '/api/stock/notes/read', { image: img });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.supplier, 'Atacadão Bebidas'); assert.equal(r.data.items.length, 2);
+  assert.equal(r.data.items[0].stock_item_id, carne, 'carne reconhecida pelo nome');
+  assert.equal(r.data.items[1].stock_item_id, null);
+  const before = (await apiC('GET', '/api/stock/items')).data.find((x) => x.id === carne).balance;
+  const conf = await apiC('POST', '/api/stock/notes/confirm', { supplier: r.data.supplier, document: r.data.document, source: 'foto', lines: [
+    { description: r.data.items[0].description, stock_item_id: carne, qty: 2, factor: 1, unit_cost_cents: 3300 },
+    { description: r.data.items[1].description, new_item: { name: 'Pilsen lata 355 ml', unit: 'un' }, qty: 2, factor: 12, unit_cost_cents: 6000 }] });
+  assert.equal(conf.status, 201, JSON.stringify(conf.data));
+  const items = (await apiC('GET', '/api/stock/items')).data;
+  assert.equal(items.find((x) => x.id === carne).balance, before + 2);
+  const lata = items.find((x) => x.name === 'Pilsen lata 355 ml');
+  assert.equal(lata.balance, 24); assert.equal(lata.avg_cost_cents, 500);
+  const again = await apiC('POST', '/api/stock/notes/read', { image: img });
+  assert.equal(again.data.items[1].stock_item_id, lata.id); assert.equal(again.data.items[1].factor, 12); assert.equal(again.data.items[1].match, 'aprendido');
+  const key = '3526' + '1'.repeat(40);
+  const x1 = await apiC('POST', '/api/stock/notes/confirm', { supplier: 'Fornecedor X', source: 'xml', nfe_key: key, lines: [{ description: 'a', stock_item_id: carne, qty: 1, unit_cost_cents: 100 }] });
+  assert.equal(x1.status, 201);
+  assert.equal((await apiC('POST', '/api/stock/notes/confirm', { supplier: 'Fornecedor X', source: 'xml', nfe_key: key, lines: [{ description: 'a', stock_item_id: carne, qty: 1, unit_cost_cents: 100 }] })).data.code, 'nfe_duplicate');
+  assert.equal((await apiC('GET', '/api/stock/notes/status')).data.own_key, true);
+  delete process.env.AI_API_URL; fake.close();
 });
 await check('módulos isolados por empresa', async () => {
   assert.equal((await api('GET', `/api/customers/${custId}`)).status, 404);

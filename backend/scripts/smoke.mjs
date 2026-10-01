@@ -3,8 +3,43 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 
-process.env.PLATFORM_SECRET ||= 'segredo-de-teste-da-central-0123456789';
+import http from 'node:http';
+process.env.PLATFORM_SECRET = 'pk_segredo-de-teste-da-central-0123456789';
 process.env.NODE_ENV = 'test';
+
+// Central falsa (contrato v1): confere a assinatura de cada chamada do RUSTEN e guarda a situação por empresa
+const hub = { tenants: new Map(), calls: [], access: (status = 'TRIAL', extra = {}) => ({ status, reason: null, blocked: false, admin_blocked: false,
+  plan: null, features: {}, notices: [], support: 'suporte@teste.dev', ...extra }) };
+const hubSign = (ts, method, route, body) => crypto.createHmac('sha256', process.env.PLATFORM_SECRET)
+  .update(`${ts}\n${method}\n${route}\n${crypto.createHash('sha256').update(body).digest('hex')}`).digest('hex');
+const hubServer = http.createServer((req, res) => {
+  let body = '';
+  req.on('data', (c) => { body += c; });
+  req.on('end', () => {
+    const route = req.url.replace(/^\/api\/hub\/v1/, '');
+    const ok = req.headers['x-platform-product'] === 'rusten'
+      && req.headers['x-platform-signature'] === hubSign(req.headers['x-platform-timestamp'], req.method, route, body);
+    const send = (st, data) => { res.writeHead(st, { 'content-type': 'application/json' }); res.end(JSON.stringify(data)); };
+    if (!ok) return send(401, { error: 'assinatura inválida' });
+    hub.calls.push({ method: req.method, route, body: body ? JSON.parse(body) : null });
+    let m;
+    if (req.method === 'POST' && route === '/tenants') {
+      const t = JSON.parse(body);
+      if (!hub.tenants.has(t.remote_id)) hub.tenants.set(t.remote_id, hub.access('TRIAL', { trial: { type: '15_DAYS', days_left: 15 } }));
+      return send(201, { tenant_id: `c-${t.remote_id}`, created: true, access: hub.tenants.get(t.remote_id) });
+    }
+    if (req.method === 'GET' && (m = route.match(/^\/tenants\/([^/]+)\/access$/))) {
+      return hub.tenants.has(m[1]) ? send(200, { access: hub.tenants.get(m[1]) }) : send(404, { error: 'Empresa não cadastrada na central.' });
+    }
+    if (req.method === 'GET' && route === '/plans') return send(200, { plans: [{ id: '00000000-0000-4000-8000-000000000001', name: 'Bar', monthly_price: 99 }], trial_default: '15_DAYS', signup_enabled: true });
+    if (req.method === 'GET' && (m = route.match(/^\/tenants\/([^/]+)\/billing$/))) {
+      return send(200, { access: hub.tenants.get(m[1]), subscription: null, payments: [], pending_payment: null, plans: [], gateway_configured: false });
+    }
+    send(404, { error: 'rota desconhecida' });
+  });
+});
+await new Promise((r) => hubServer.listen(0, '127.0.0.1', r));
+process.env.PLATFORM_HUB_URL = `http://127.0.0.1:${hubServer.address().port}`;
 if (!/test/.test(process.env.DATABASE_URL || '')) { console.error('Use um banco de teste (nome contendo "test")'); process.exit(1); }
 
 const { pool, businessDate, splitCents, lineTotal } = await import('../src/lib/core.js');
@@ -12,7 +47,7 @@ await pool.query('drop schema public cascade; create schema public;');
 const { migrate } = await import('../src/migrate.js');
 await migrate({ log: () => {} });
 const { createApp } = await import('../src/server.js');
-const { sign } = await import('../src/lib/platform.js');
+const { signPayload } = await import('../src/lib/platform.js');
 const { mergePdv } = await import('../src/lib/pdv.js');
 
 const server = createApp().listen(0);
@@ -367,49 +402,141 @@ await check('fechamento cego: diferença exige justificativa', async () => {
   assert.notEqual(ok.data.difference_cents, 0);
 });
 
-// ---------- Assinatura / central ----------
+// ---------- Assinatura / central (contrato v1 do ORBI) ----------
+const setAccess = async (companyId, access) => {
+  hub.tenants.set(String(companyId), access);
+  await pool.query('update companies set access = $2, access_updated_at = now() where id = $1', [companyId, access]);
+};
+// chamada assinada como a central faz (rota relativa a /api/platform/v1)
+async function centralCall(method, route, payload, secret = process.env.PLATFORM_SECRET, ts = Math.floor(Date.now() / 1000)) {
+  const body = payload === undefined ? '' : JSON.stringify(payload);
+  const headers = { 'content-type': 'application/json', 'x-platform-product': 'rusten', 'x-platform-timestamp': String(ts),
+    'x-platform-signature': signPayload(secret, ts, method, route, body) };
+  const res = await fetch(`${base}/api/platform/v1${route}`, { method, headers, body: body || undefined });
+  const text = await res.text(); let data; try { data = JSON.parse(text); } catch { data = text; }
+  return { status: res.status, data, headers };
+}
+await check('cadastro registra a empresa na central e recebe a situação de teste', async () => {
+  const reg = hub.calls.filter((c) => c.method === 'POST' && c.route === '/tenants').map((c) => c.body.remote_id);
+  assert.ok(reg.includes(String(A.me.company.id)) && reg.includes(String(B.me.company.id)));
+  const acc = await api('GET', '/api/access');
+  assert.equal(acc.data.access.state, 'TRIAL'); assert.equal(acc.data.access.allowed, true);
+  const t = hub.calls.find((c) => c.route === '/tenants').body;
+  assert.ok(t.name && t.owner_name && t.metrics && !('password_hash' in t) && !('owner_email' in t));
+});
 await check('bloqueio administrativo: 402 nas operações, regularização continua acessível', async () => {
-  await pool.query(`update companies set access = $2 where id = $1`, [A.me.company.id, { admin_block: { active: true, reason: 'Teste' }, paid_until: '2099-01-01' }]);
+  await setAccess(A.me.company.id, hub.access('SUSPENDED', { reason: 'ADMINISTRATIVO', blocked: true, admin_blocked: true }));
   const r = await api('GET', '/api/pdv/sessions');
   assert.equal(r.status, 402);
   const acc = await api('GET', '/api/access');
-  assert.equal(acc.status, 200); assert.equal(acc.data.access.state, 'bloqueio_administrativo');
+  assert.equal(acc.status, 200); assert.equal(acc.data.access.state, 'SUSPENDED'); assert.equal(acc.data.access.adminBlocked, true);
 });
-await check('pagamento em dia não remove bloqueio administrativo; liberação manual libera', async () => {
-  await pool.query(`update companies set access = $2 where id = $1`, [A.me.company.id, { manual_release_until: 'indefinido', paid_until: '2000-01-01' }]);
+await check('assinatura ativa libera; inadimplente avisa sem bloquear', async () => {
+  await setAccess(A.me.company.id, hub.access('ACTIVE'));
   assert.equal((await api('GET', '/api/pdv/sessions')).status, 200);
-});
-await check('teste vencido e fora da carência bloqueia; dentro da carência avisa', async () => {
-  const past = new Date(Date.now() - 86400000).toISOString(); const future = new Date(Date.now() + 5 * 86400000).toISOString();
-  await pool.query(`update companies set access = $2 where id = $1`, [A.me.company.id, { trial_ends_at: past, paid_until: past }]);
-  assert.equal((await api('GET', '/api/pdv/sessions')).status, 402);
-  await pool.query(`update companies set access = $2 where id = $1`, [A.me.company.id, { trial_ends_at: past, paid_until: past, grace_until: future }]);
+  await setAccess(A.me.company.id, hub.access('PAST_DUE', { reason: 'FINANCEIRO', notices: [{ level: 'danger', text: 'Regularize o pagamento.' }] }));
   const r = await api('GET', '/api/access');
-  assert.equal(r.data.access.state, 'carencia'); assert.ok(r.data.access.warning);
+  assert.equal(r.data.access.warning, 'Regularize o pagamento.');
   assert.equal((await api('GET', '/api/pdv/sessions')).status, 200);
+});
+await check('teste encerrado bloqueia com a mensagem certa', async () => {
+  await setAccess(A.me.company.id, hub.access('EXPIRED', { reason: 'TRIAL_EXPIRADO', blocked: true }));
+  const r = await api('GET', '/api/pdv/sessions');
+  assert.equal(r.status, 402); assert.match(r.data.error, /teste terminou/);
 });
 await check('módulo fora do plano: 403', async () => {
-  await pool.query(`update companies set access = $2 where id = $1`, [A.me.company.id, { trial_ends_at: 'ilimitado', modules: ['salao'] }]);
+  await setAccess(A.me.company.id, hub.access('ACTIVE', { features: { pdv: false, salao: true, cardapio: true } }));
   const r = await api('GET', '/api/pdv/sessions');
   assert.equal(r.status, 403); assert.equal(r.data.code, 'module_disabled');
-  await pool.query(`update companies set access = '{}' where id = $1`, [A.me.company.id]);
+  await setAccess(A.me.company.id, hub.access('ACTIVE'));
 });
-await check('central: chamada assinada aceita; inválida e repetida recusadas', async () => {
-  const path = '/api/platform/v1/manifest';
-  const headers = sign(process.env.PLATFORM_SECRET, { method: 'GET', path });
-  const ok = await anon('GET', path, null, headers);
-  assert.equal(ok.status, 200); assert.equal(ok.data.product, 'rusten');
-  assert.equal((await anon('GET', path, null, headers)).status, 401, 'nonce repetido');
-  const badSig = { ...sign('outro-segredo', { method: 'GET', path }) };
-  assert.equal((await anon('GET', path, null, badSig)).status, 401);
-  const body = JSON.stringify({ access: { trial_ends_at: 'ilimitado', modules: ['pdv', 'salao', 'cardapio'] } });
-  const p2 = `/api/platform/v1/tenants/${B.me.company.id}/access`;
-  const res = await fetch(base + p2, { method: 'POST', body, headers: { 'content-type': 'application/json', ...sign(process.env.PLATFORM_SECRET, { method: 'POST', path: p2, body }) } });
-  assert.equal(res.status, 200);
-  assert.equal((await apiB('GET', '/api/access')).data.access.state, 'teste');
+await check('situação antiga é revalidada na central', async () => {
+  hub.tenants.set(String(A.me.company.id), hub.access('ACTIVE', { plan: { id: 'p1', name: 'Bar Pro' } }));
+  await pool.query("update companies set access_updated_at = now() - interval '10 minutes' where id = $1", [A.me.company.id]);
+  assert.equal((await api('GET', '/api/access')).data.access.plan, 'Bar Pro');
+});
+await check('central: chamada assinada aceita; inválida, vencida e repetida recusadas', async () => {
+  const ok = await centralCall('GET', '/manifest');
+  assert.equal(ok.status, 200); assert.equal(ok.data.code, 'rusten'); assert.ok(ok.data.features.pdv && ok.data.settings.system.length);
+  const again = await fetch(`${base}/api/platform/v1/manifest`, { headers: ok.headers });
+  assert.equal(again.status, 401, 'assinatura repetida');
+  assert.equal((await centralCall('GET', '/manifest', undefined, 'pk_outro')).status, 401);
+  assert.equal((await centralCall('GET', '/manifest', undefined, undefined, Math.floor(Date.now() / 1000) - 900)).status, 401);
+  const p = await centralCall('POST', `/tenants/${B.me.company.id}/access`, { access: hub.access('TRIAL', { trial: { type: 'UNLIMITED' } }) });
+  assert.equal(p.status, 200);
+  hub.tenants.set(String(B.me.company.id), hub.access('TRIAL', { trial: { type: 'UNLIMITED' } }));
+  assert.equal((await apiB('GET', '/api/access')).data.access.state, 'TRIAL');
+});
+await check('central lista empresas e detalha usuários sem senhas', async () => {
+  const l = await centralCall('GET', '/tenants');
+  assert.equal(l.status, 200); assert.ok(l.data.items.length >= 2);
+  const d = await centralCall('GET', `/tenants/${A.me.company.id}`);
+  assert.equal(d.status, 200); assert.ok(d.data.tenant.users.list.length >= 1);
+  assert.ok(!JSON.stringify(d.data).includes('password'));
+});
+await check('central altera parâmetros do sistema e da empresa', async () => {
+  const s = await centralCall('PUT', '/settings', { values: { default_service_fee: 12, notice_text: 'Manutenção às 23h', notice_level: 'warn' } });
+  assert.equal(s.status, 200, JSON.stringify(s.data)); assert.equal(s.data.values.default_service_fee, 12);
+  assert.equal((await centralCall('PUT', '/settings', { values: { default_tables: 9999 } })).status, 400);
+  assert.equal((await centralCall('PUT', '/settings', { values: { inexistente: 1 } })).status, 400);
+  const me = await api('GET', '/api/auth/me');
+  assert.equal(me.data.notice.text, 'Manutenção às 23h');
+  const t = await centralCall('PUT', `/tenants/${A.me.company.id}/settings`, { values: { pdv_service_fee: 8, pdv_card_prefix: 'CX-' }, reason: 'pedido do cliente' });
+  assert.equal(t.status, 200, JSON.stringify(t.data)); assert.equal(t.data.values.pdv_service_fee, 8);
+  assert.equal((await centralCall('PUT', `/tenants/${A.me.company.id}/settings`, { values: { pdv_scanner_enabled: false, pdv_allow_manual: false } })).status, 400);
+  await centralCall('PUT', '/settings', { values: { notice_text: '' } });
+});
+await check('central cria senha provisória do responsável', async () => {
+  const r = await centralCall('POST', `/tenants/${B.me.company.id}/owner-reset`, {});
+  assert.equal(r.status, 200); assert.ok(r.data.temporary_password);
+  const login = await anon('POST', '/api/auth/login', { email: 'b@teste.dev', password: r.data.temporary_password });
+  assert.equal(login.status, 200);
 });
 await check('usuário comum não acessa rotas da central', async () => {
   assert.equal((await api('GET', '/api/platform/v1/tenants')).status, 401);
+});
+await check('demonstração: entra direto, com movimento de exemplo, sem central e fora da lista da central', async () => {
+  const r = await anon('POST', '/api/auth/demo');
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  const d = client(r.data.access_token);
+  const me = (await d('GET', '/api/auth/me')).data;
+  assert.equal(me.company.is_demo, true); assert.equal(me.access.state, 'DEMO');
+  const sess = await d('GET', '/api/pdv/sessions');
+  assert.equal(sess.status, 200); assert.ok(sess.data.length >= 3, JSON.stringify(sess.data).slice(0, 200));
+  const list = await centralCall('GET', '/tenants');
+  assert.ok(!list.data.items.some((t) => t.remote_id === String(me.company.id)));
+  assert.equal((await centralCall('GET', `/tenants/${me.company.id}`)).status, 404);
+  assert.ok(!hub.calls.some((c) => c.body?.remote_id === String(me.company.id)));
+  // ativação: vira conta real, cadastra na central e o login passa a valer
+  const act = await d('POST', '/api/auth/activate', { company_name: 'Bar do Visitante', name: 'Visitante Real', email: 'demo-ativo@teste.dev', password: 'Ativacao2026xyz', accept_terms: true });
+  assert.equal(act.status, 200, JSON.stringify(act.data));
+  const me2 = (await client(act.data.access_token)('GET', '/api/auth/me')).data;
+  assert.equal(me2.company.is_demo, false); assert.equal(me2.company.name, 'Bar do Visitante');
+  assert.ok(hub.calls.some((c) => c.route === '/tenants' && c.body?.remote_id === String(me.company.id)));
+  assert.equal((await client(act.data.access_token)('GET', '/api/pdv/sessions')).data.length, 0, 'movimento de exemplo apagado');
+  assert.equal((await anon('POST', '/api/auth/login', { email: 'demo-ativo@teste.dev', password: 'Ativacao2026xyz' })).status, 200);
+});
+await check('demonstração antiga é apagada por inteiro (inclusive auditoria)', async () => {
+  const r = await anon('POST', '/api/auth/demo');
+  const me = (await client(r.data.access_token)('GET', '/api/auth/me')).data;
+  await pool.query("update companies set created_at = now() - interval '30 days' where id = $1", [me.company.id]);
+  await anon('POST', '/api/auth/demo');
+  assert.equal((await pool.query('select 1 from companies where id = $1', [me.company.id])).rows.length, 0);
+  assert.equal((await pool.query('select 1 from audit_events where company_id = $1', [me.company.id])).rows.length, 0);
+  await assert.rejects(pool.query('select purge_demo_company($1)', [A.me.company.id]), /não é de demonstração/);
+});
+await check('parâmetro do sistema fecha cadastros e demonstração', async () => {
+  await centralCall('PUT', '/settings', { values: { signup_enabled: false, demo_enabled: false } });
+  assert.equal((await anon('POST', '/api/auth/demo')).status, 403);
+  const plans = await anon('GET', '/api/auth/plans');
+  assert.equal(plans.data.signup_open, false); assert.equal(plans.data.hub, true); assert.equal(plans.data.plans.length, 1);
+  const r = await anon('POST', '/api/auth/register', { company: { name: 'Fechado', segment: 'bar' }, owner: { name: 'X Y', email: 'f@teste.dev', password: 'Motocustom2026x' }, accept_terms: true });
+  assert.equal(r.status, 403);
+  await centralCall('PUT', '/settings', { values: { signup_enabled: true, demo_enabled: true } });
+});
+await check('portal da assinatura repassa à central', async () => {
+  const r = await api('GET', '/api/access/billing');
+  assert.equal(r.status, 200, JSON.stringify(r.data)); assert.equal(r.data.hub, true); assert.ok(Array.isArray(r.data.payments));
 });
 
 // ---------- Segurança e auditoria ----------
@@ -440,6 +567,7 @@ await check('remoção da demonstração preserva produtos já vendidos', async 
 });
 
 server.close();
+hubServer.close();
 await pool.end();
 console.log(`\n${passed} verificações OK, ${failures.length} falhas`);
 if (failures.length) { console.log(failures.map((f) => ` - ${f}`).join('\n')); process.exit(1); }

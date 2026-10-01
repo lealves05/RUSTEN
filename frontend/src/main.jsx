@@ -17,6 +17,7 @@ const Cash = lazy(() => import('./pages/Cash.jsx'));
 const Settings = lazy(() => import('./pages/Settings.jsx'));
 const Support = lazy(() => import('./pages/Support.jsx'));
 const Soon = lazy(() => import('./pages/Soon.jsx'));
+const Subscription = lazy(() => import('./pages/Subscription.jsx'));
 
 function Guard({ children }) {
   const s = useSession();
@@ -32,6 +33,8 @@ function App() {
     <Routes>
       <Route path="/entrar" element={s.me ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/cadastro" element={s.me ? <Navigate to="/" replace /> : <Register />} />
+      <Route path="/assinatura" element={s.loading ? <Loading /> : !s.me ? <Navigate to="/entrar" replace />
+        : <Suspense fallback={<Loading />}><Subscription standalone /></Suspense>} />
       <Route element={<Guard><Layout /></Guard>}>
         <Route index element={<Suspense fallback={<Loading />}><Home /></Suspense>} />
         <Route path="pdv" element={<Suspense fallback={<Loading />}><Pdv /></Suspense>} />

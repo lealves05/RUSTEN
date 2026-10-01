@@ -76,3 +76,47 @@ async function seedDemo(db, companyId, sectors) {
     }
   }
 }
+
+/* Movimento de exemplo da demonstração: mesa ocupada, comandas abertas com itens (um já pronto na cozinha)
+   e um consumo encerrado e pago hoje — para o visitante ver salão, PDV e início com dados. */
+export async function seedDemoActivity(db, companyId, unitId, userId, businessDate) {
+  const prod = Object.fromEntries((await db.query('select id, name, price_cents, sector_id from products where company_id = $1', [companyId]))
+    .rows.map((p) => [p.name, p]));
+  const table = (await db.query('select id from dining_tables where company_id = $1 and number = 3', [companyId])).rows[0];
+  const cards = (await db.query('select id from tab_cards where company_id = $1 order by number limit 3', [companyId])).rows;
+  let seq = 0;
+  async function open(kind, { tableId = null, cardId = null, label = null }, items, status = 'aberta') {
+    const s = (await db.query(
+      `insert into consumption_sessions (company_id, unit_id, kind, card_id, table_id, label, status, service_fee_bp, opened_by, business_date,
+                                         opened_at, closed_at, closed_by)
+       values ($1,$2,$3,$4,$5,$6,$7,1000,$8,$9, now() - interval '90 minutes', case when $7 = 'encerrada' then now() - interval '20 minutes' end,
+               case when $7 = 'encerrada' then $8::bigint end) returning id`,
+      [companyId, unitId, kind, cardId, tableId, label, status, userId, businessDate])).rows[0].id;
+    let total = 0;
+    for (const [name, qty, ks] of items) {
+      const p = prod[name];
+      if (!p) continue;
+      const t = p.price_cents * qty;
+      total += t;
+      await db.query(
+        `insert into order_items (company_id, session_id, product_id, description, qty, unit_price_cents, total_cents, sector_id,
+                                  kitchen_status, launch_mode, user_id, idempotency_key, created_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'manual',$10,$11, now() - interval '60 minutes')`,
+        [companyId, s, p.id, p.name, qty, p.price_cents, t, p.sector_id, ks, userId, `demo-${s}-${++seq}`]);
+    }
+    return { id: s, total };
+  }
+  if (table) {
+    await open('mesa', { tableId: table.id, label: 'Mesa 3' },
+      [['Hambúrguer da oficina', 2, 'preparando'], ['Porção de fritas', 1, 'pronto'], ['Chope 300 ml', 4, 'entregue']]);
+    await db.query("update dining_tables set status = 'ocupada' where id = $1", [table.id]);
+  }
+  if (cards[0]) await open('comanda', { cardId: cards[0].id }, [['Cerveja IPA 600 ml', 2, 'nao_produz'], ['Caipirinha', 1, 'novo']]);
+  if (cards[1]) await open('comanda', { cardId: cards[1].id }, [['Gin tônica', 2, 'entregue'], ['Água mineral', 1, 'nao_produz']]);
+  const closed = await open('balcao', { label: 'Balcão' }, [['Pilsen long neck', 3, 'nao_produz'], ['Porção de fritas', 1, 'entregue']], 'encerrada');
+  const withFee = closed.total + Math.round(closed.total * 0.1);
+  await db.query(
+    `insert into payments (company_id, session_id, method, amount_cents, business_date, idempotency_key, user_id, created_at)
+     values ($1,$2,'pix',$3,$4,$5,$6, now() - interval '20 minutes')`,
+    [companyId, closed.id, withFee, businessDate, `demo-pay-${closed.id}`, userId]);
+}

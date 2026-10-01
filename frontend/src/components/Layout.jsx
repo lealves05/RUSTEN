@@ -8,6 +8,7 @@ import {
 import { useSession } from '../lib/session.jsx';
 import { api, terminal } from '../lib/api.js';
 import { Badge, Logo, Modal } from './ui.jsx';
+import { DemoBar } from './Activate.jsx';
 
 export const NAV = [
   { to: '/', label: 'Início', icon: House, end: true, tip: 'Resumo do dia' },
@@ -142,8 +143,15 @@ export default function Layout() {
             </div>
           </div>
           {topMenu && <nav className="hidden gap-1 overflow-x-auto px-3 pb-2 md:flex" aria-label="Menu principal">{links(false)}</nav>}
-          {warning && <div className="border-t border-warn/40 bg-warn/10 px-4 py-1.5 text-sm"><Badge tone="warn">Assinatura</Badge> {warning}</div>}
+          {s.me?.notice && <div className={`border-t px-4 py-1.5 text-sm ${s.me.notice.level === 'warn' ? 'border-warn/40 bg-warn/10' : 'border-copper/30 bg-copper/5'}`}><Badge tone={s.me.notice.level === 'warn' ? 'warn' : 'info'}>Aviso</Badge> {s.me.notice.text}</div>}
+          {(s.me?.access?.notices || []).map((n) => (
+            <div key={n.text} className={`flex flex-wrap items-center gap-2 border-t px-4 py-1.5 text-sm ${n.level === 'danger' ? 'border-rust/40 bg-rust/10' : 'border-warn/40 bg-warn/10'}`}>
+              <Badge tone={n.level === 'danger' ? 'bad' : 'warn'}>Assinatura</Badge> <span className="flex-1">{n.text}</span>
+              {s.can('assinatura.gerenciar') && <button className="font-semibold underline" onClick={() => nav('/configuracoes/assinatura')}>Ver assinatura</button>}
+            </div>
+          ))}
         </header>
+        <DemoBar />
         {!s.me?.terminalId && (s.can('pdv.lancar') || s.can('caixa.abrir')) && <TerminalBar onSet={() => s.reload()} />}
         <main className="min-w-0 flex-1 p-3 sm:p-5"><Outlet /></main>
       </div>

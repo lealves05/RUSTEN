@@ -34,7 +34,7 @@ export function SessionProvider({ children }) {
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => onAuthLost(() => { tokens.clear(); setMe(null); }), []);
-  useEffect(() => onBlocked((b) => setBlocked({ allowed: false, reason: b?.error, state: b?.state })), []);
+  useEffect(() => onBlocked((b) => setBlocked((cur) => cur || { allowed: false, reason: b?.error, state: b?.state })), []);
 
   const logout = useCallback(async (all = false) => {
     try { await api('/api/auth/logout', { method: 'POST', body: { all } }); } catch { /* sessão já inválida */ }

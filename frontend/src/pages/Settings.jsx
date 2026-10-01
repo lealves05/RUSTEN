@@ -4,6 +4,7 @@ import { NavLink, Navigate, Route, Routes } from 'react-router-dom';
 import { api, terminal } from '../lib/api.js';
 import { dateTime, bp } from '../lib/format.js';
 import { useSession, applyTheme } from '../lib/session.jsx';
+import Subscription from './Subscription.jsx';
 import { Badge, ErrorBox, Field, Loading, Modal, PageHeader, Toggle, useLoad, useToast } from '../components/ui.jsx';
 
 export default function Settings() {
@@ -296,28 +297,6 @@ function Units() {
           {manage && <button className="btn-ghost mt-2" onClick={() => addTerm(u)}>Adicionar terminal</button>}
         </div>
       ))}
-    </div>
-  );
-}
-
-function Subscription() {
-  const s = useSession();
-  const a = s.me.access;
-  const STATE = { sem_central: 'Sem central configurada — acesso liberado', ativa: 'Ativa', teste: 'Em teste', carencia: 'Em carência', liberacao_manual: 'Liberação manual', vencida: 'Vencida', bloqueio_administrativo: 'Bloqueio administrativo' };
-  const [err, setErr] = useState(null);
-  const [msg, setMsg] = useState(null);
-  const verify = async () => { setErr(null); try { await api('/api/access/verify', { method: 'POST' }); await s.reload(); setMsg('Situação atualizada.'); } catch (e) { setErr(e); } };
-  return (
-    <div className="card space-y-3 p-5">
-      <div className="flex items-center gap-2"><h3 className="font-display text-2xl">Assinatura RUSTEN</h3><Badge tone={a.allowed ? 'ok' : 'bad'}>{STATE[a.state] || a.state}</Badge></div>
-      {a.plan && <p>Plano: <b>{a.plan}</b></p>}
-      {a.trialEndsAt && <p>Teste até: {a.trialEndsAt === 'ilimitado' ? 'sem prazo' : dateTime(a.trialEndsAt, s.tz)}</p>}
-      {a.warning && <p><Badge tone="warn">Aviso</Badge> {a.warning}</p>}
-      <p className="text-sm text-muted">Cobrança, planos e prazos são administrados pela central da plataforma (a mesma usada pelos demais sistemas). Pagamentos dos seus clientes ao estabelecimento são separados e não passam por aqui.</p>
-      {a.managed && s.can('assinatura.gerenciar') && <button className="btn-ghost" onClick={verify}>Verificar situação agora</button>}
-      {msg && <p className="text-sm">{msg}</p>}
-      <ErrorBox error={err} />
-      {a.updatedAt && <p className="text-xs text-muted">Última atualização recebida da central: {dateTime(a.updatedAt, s.tz)}</p>}
     </div>
   );
 }

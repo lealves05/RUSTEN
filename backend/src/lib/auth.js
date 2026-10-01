@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import { q, HttpError, forbidden } from './core.js';
 import { MODULES } from './catalog.js';
 import { env } from './env.js';
+import { refreshAccess } from './platform.js';
 
 const isProd = env.NODE_ENV === 'production';
 // Em Supabase Edge sem JWT_SECRET, deriva do segredo de serviço do projeto (nunca exposto ao navegador)
@@ -30,7 +31,7 @@ export async function loadContext(userId, companyId) {
   const { rows } = await q(
     `select u.id, u.company_id, u.unit_id, u.name, u.email, u.role_key, u.active, u.password_changed_at,
             r.name as role_name, r.level, r.permissions,
-            c.name as company_name, c.segment, c.timezone, c.settings, c.access, c.access_updated_at
+            c.name as company_name, c.segment, c.timezone, c.settings, c.access, c.access_updated_at, c.is_demo
        from users u join roles r on r.company_id = u.company_id and r.key = u.role_key
        join companies c on c.id = u.company_id
       where u.id = $1 and u.company_id = $2`,
@@ -59,11 +60,14 @@ export function auth() {
       if (payload.iat * 1000 < new Date(u.password_changed_at).getTime() - 1000)
         throw new HttpError(401, 'Senha alterada. Entre novamente.', 'unauthenticated');
 
+      // situação da assinatura: a guardada, revalidada na central a cada 5 min (demonstração nunca consulta)
+      const raw = await refreshAccess({ id: u.company_id, is_demo: u.is_demo, access: u.access, access_updated_at: u.access_updated_at });
       const ctx = {
         userId: u.id, companyId: u.company_id, unitId: u.unit_id, name: u.name, email: u.email,
         role: u.role_key, roleName: u.role_name, level: u.level, perms: new Set(u.permissions),
-        company: { id: u.company_id, name: u.company_name, segment: u.segment, timezone: u.timezone, settings: u.settings },
-        access: computeAccess(u.access, u.access_updated_at), sessionId: payload.sid, terminalId: null,
+        company: { id: u.company_id, name: u.company_name, segment: u.segment, timezone: u.timezone, settings: u.settings, is_demo: u.is_demo },
+        access: u.is_demo ? computeAccess(null, null, { demo: true }) : computeAccess(raw ?? u.access, u.access_updated_at),
+        sessionId: payload.sid, terminalId: null,
       };
       const tid = Number(req.headers['x-terminal-id']);
       if (tid) {
@@ -105,32 +109,38 @@ export function scrub(obj) {
   return obj;
 }
 
-/* Política de acesso (seção 19.7). Os campos vêm da central; aplicamos a precedência também aqui:
-   1 bloqueio administrativo  2 liberação manual  3 período pago  4 teste  5 carência  6 bloqueio. */
-export function computeAccess(access, updatedAt, now = new Date()) {
+/* Situação de acesso entregue pela central (resumo do ORBI: status, blocked, reason, plan, features, notices, trial...).
+   A central já aplica a precedência: bloqueio administrativo > financeiro > teste > módulos do plano.
+   Sem central (ou demonstração), tudo liberado. */
+export const STATUS_LABEL = {
+  ACTIVE: 'Ativa', TRIAL: 'Em teste', PAYMENT_PENDING: 'Aguardando pagamento', PAST_DUE: 'Pagamento pendente',
+  SUSPENDED: 'Suspensa', CANCELED: 'Cancelada', EXPIRED: 'Expirada',
+};
+const BLOCK_TEXT = {
+  ADMINISTRATIVO: 'O acesso desta empresa foi bloqueado pela administração da plataforma. Fale com o suporte.',
+  TRIAL_EXPIRADO: 'O período de teste terminou. Contrate um plano para continuar operando — seus dados estão preservados.',
+  CANCELAMENTO: 'A assinatura foi encerrada. Contrate novamente para voltar a operar — seus dados estão preservados.',
+  FINANCEIRO: 'Acesso suspenso por pendência financeira. Regularize a assinatura — seus dados estão preservados.',
+};
+export function computeAccess(access, updatedAt, { demo = false } = {}) {
   const a = access || {};
   const allModules = Object.keys(MODULES);
-  if (!Object.keys(a).length) {
-    return { allowed: true, state: 'sem_central', modules: allModules, warning: null, managed: false };
+  if (demo) return { allowed: true, state: 'DEMO', label: 'Demonstração', modules: allModules, warning: null, notices: [], managed: false, demo: true };
+  if (!Object.keys(a).length || typeof a.blocked !== 'boolean') {
+    return { allowed: true, state: 'sem_central', label: 'Sem central', modules: allModules, warning: null, notices: [], managed: false };
   }
-  const modules = Array.isArray(a.modules) && a.modules.length ? a.modules : allModules;
-  const base = { modules, plan: a.plan ?? null, managed: true, updatedAt, support: a.support ?? null };
-  const after = (d) => d === 'indefinido' || (d && new Date(d) > now);
-  if (a.admin_block?.active || a.blocked === true) {
-    return { ...base, allowed: false, state: 'bloqueio_administrativo', reason: a.admin_block?.reason || a.block_reason || 'Acesso bloqueado pela administração' };
-  }
-  if (after(a.manual_release_until)) return { ...base, allowed: true, state: 'liberacao_manual', warning: a.warning ?? null };
-  if (after(a.paid_until)) return { ...base, allowed: true, state: 'ativa', warning: a.warning ?? null };
-  if (a.trial_ends_at === 'ilimitado' || after(a.trial_ends_at)) return { ...base, allowed: true, state: 'teste', trialEndsAt: a.trial_ends_at, warning: a.warning ?? null };
-  if (a.grace_until && after(a.grace_until)) {
-    return { ...base, allowed: true, state: 'carencia', graceUntil: a.grace_until,
-      warning: a.warning || `Pagamento pendente. O acesso será bloqueado em ${new Date(a.grace_until).toLocaleDateString('pt-BR')}.` };
-  }
-  // Formato simples da central: situação já calculada
-  if (!('paid_until' in a) && !('trial_ends_at' in a) && ['active', 'ativa', 'trial', 'teste', 'grace', 'carencia'].includes(a.status)) {
-    return { ...base, allowed: true, state: a.status, warning: a.warning ?? null };
-  }
-  return { ...base, allowed: false, state: 'vencida', reason: a.block_reason || 'Assinatura vencida. Regularize para continuar operando.' };
+  const f = a.features && typeof a.features === 'object' ? a.features : {};
+  const known = allModules.filter((k) => k in f);
+  const modules = known.length ? allModules.filter((k) => f[k] !== false) : allModules;
+  const notices = Array.isArray(a.notices) ? a.notices.filter((n) => n && n.text).map((n) => ({ level: n.level === 'danger' ? 'danger' : 'warn', text: String(n.text) })) : [];
+  const byAdmin = !!a.admin_blocked || a.reason === 'ADMINISTRATIVO';
+  return {
+    allowed: !a.blocked, state: a.status, label: STATUS_LABEL[a.status] || a.status, reasonCode: a.reason || null,
+    reason: a.blocked ? (BLOCK_TEXT[byAdmin ? 'ADMINISTRATIVO' : a.reason] || BLOCK_TEXT.FINANCEIRO) : null,
+    adminBlocked: byAdmin, modules, notices, warning: notices[0]?.text || null,
+    plan: a.plan?.name || null, planId: a.plan?.id || null, cycle: a.cycle || null, validUntil: a.valid_until || null, trial: a.trial || null,
+    support: a.support || null, supportChannel: a.support_channel || null, managed: true, updatedAt,
+  };
 }
 
 // Portão da assinatura: bloqueada → 402 (só rotas de regularização); módulo fora do plano → 403

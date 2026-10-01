@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { Sparkles } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api, tokens } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
@@ -33,6 +34,15 @@ export default function Login() {
   const [f, setF] = useState({ email: '', password: '' });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  const [cfg, setCfg] = useState(null);
+  useEffect(() => { api('/api/auth/plans').then(setCfg).catch(() => setCfg(null)); }, []);
+  const demo = async () => {
+    setBusy(true); setErr(null);
+    try {
+      tokens.save(await api('/api/auth/demo', { method: 'POST' }));
+      await s.reload();
+    } catch (e2) { setErr(e2); } finally { setBusy(false); }
+  };
   const submit = async (e) => {
     e.preventDefault(); setBusy(true); setErr(null);
     try {
@@ -48,7 +58,14 @@ export default function Login() {
         <ErrorBox error={err} />
         <button className="btn-primary btn-xl w-full" disabled={busy}>{busy ? 'Entrando…' : 'Entrar'}</button>
       </form>
-      <p className="mt-6 text-sm text-muted">Ainda não usa o RUSTEN? <Link className="font-semibold text-copper underline" to="/cadastro">Cadastre seu estabelecimento</Link></p>
+      {cfg?.demo_enabled && (
+        <button type="button" className="btn-ghost btn-xl mt-3 w-full border border-copper/50" onClick={demo} disabled={busy}>
+          <Sparkles size={18} /> Experimentar demonstração
+        </button>
+      )}
+      {cfg?.signup_open !== false
+        ? <p className="mt-6 text-sm text-muted">Ainda não usa o RUSTEN? <Link className="font-semibold text-copper underline" to="/cadastro">Cadastre seu estabelecimento</Link></p>
+        : <p className="mt-6 text-sm text-muted">Novos cadastros estão temporariamente fechados.</p>}
       <p className="mt-2 text-xs text-muted">Esqueceu a senha? Peça ao proprietário ou administrador da sua empresa para redefinir, ou fale com o suporte.</p>
     </AuthShell>
   );

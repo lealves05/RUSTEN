@@ -61,8 +61,8 @@ async function seedDemo(db, companyId, sectors) {
     const c = await db.query('insert into categories (company_id, name, sort, demo) values ($1,$2,$3,true) returning id', [companyId, `${cat} (demonstração)`, sort++]);
     for (const [name, price, ean] of items) {
       const p = await db.query(
-        `insert into products (company_id, category_id, sector_id, name, price_cents, kind, demo, favorite)
-         values ($1,$2,$3,$4,$5,$6,true,$7) returning id`,
+        `insert into products (company_id, category_id, sector_id, name, price_cents, kind, demo, favorite, channels)
+         values ($1,$2,$3,$4,$5,$6,true,$7,'{pdv,delivery,cardapio_digital}') returning id`,
         [companyId, c.rows[0].id, sectors[sector], name, price, sector === 'Cozinha' ? 'recipe' : 'resale', sort === 1]);
       if (ean) await registerCode(db, companyId, ean, 'PRODUTO', p.rows[0].id);
       if (name.startsWith('Hambúrguer')) {

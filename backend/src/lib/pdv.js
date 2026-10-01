@@ -119,14 +119,15 @@ export function assertUnitScope(ctx, unitId) {
 
 /* Totais de uma sessão: consumo (itens ativos), taxa de serviço discriminada, pagos e saldo. */
 export async function sessionTotals(db, sessionId) {
-  const s = await db.query('select service_fee_bp from consumption_sessions where id = $1', [sessionId]);
+  const s = await db.query('select service_fee_bp, delivery_fee_cents from consumption_sessions where id = $1', [sessionId]);
   const it = await db.query(
     `select coalesce(sum(total_cents) filter (where status = 'ativo'), 0)::bigint as items from order_items where session_id = $1`, [sessionId]);
   const pay = await db.query(
     `select coalesce(sum(amount_cents) filter (where status = 'confirmado'), 0)::bigint as paid from payments where session_id = $1`, [sessionId]);
   const items = Number(it.rows[0].items);
   const serviceFee = Math.round((items * (s.rows[0]?.service_fee_bp || 0)) / 10000);
-  const total = items + serviceFee;
+  const deliveryFee = Number(s.rows[0]?.delivery_fee_cents || 0);
+  const total = items + serviceFee + deliveryFee;
   const paid = Number(pay.rows[0].paid);
-  return { items, serviceFee, serviceFeeBp: s.rows[0]?.service_fee_bp || 0, total, paid, balance: total - paid };
+  return { items, serviceFee, serviceFeeBp: s.rows[0]?.service_fee_bp || 0, deliveryFee, total, paid, balance: total - paid };
 }

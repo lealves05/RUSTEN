@@ -5,6 +5,8 @@ import { q, tx, h, parse, bad, forbidden, notFound, conflict, lineTotal, splitCe
 import { need, audit, assertCan } from '../lib/auth.js';
 import { pdvSettings, resolveCode, lockSession, assertOpen, assertUnitScope, sessionTotals, normalizeCode } from '../lib/pdv.js';
 import { consumeAuthorization } from './admin.js';
+import { consumeForItem, reverseForItem } from '../lib/stock.js';
+import { earnPoints, reverseEarn, reverseRedeemByPayment } from '../lib/customers.js';
 
 export const router = Router();
 
@@ -48,6 +50,7 @@ const openSchema = z.object({
   card_code: z.string().max(128).optional(),
   table_id: z.number().int().optional(),
   customer_name: z.string().trim().max(80).optional(),
+  customer_id: z.number().int().optional(),
   label: z.string().trim().max(60).optional(),
   unit_id: z.number().int().optional(),
 });
@@ -75,6 +78,11 @@ export async function openSession(db, ctx, b) {
     if (unitId && t.unit_id !== unitId) throw bad('Mesa e comanda de unidades diferentes');
     tableId = t.id; unitId = t.unit_id;
   }
+  if (b.customer_id) {
+    const cu = (await db.query('select id, name from customers where id = $1 and company_id = $2 and anonymized_at is null', [b.customer_id, ctx.companyId])).rows[0];
+    if (!cu) throw notFound('Cliente não encontrado');
+    b.customer_name = b.customer_name || cu.name;
+  }
   if (b.kind === 'comanda' && !cardId) throw bad('Informe a comanda');
   if (b.kind === 'mesa' && !tableId) throw bad('Informe a mesa');
   if (!unitId) unitId = (await db.query('select id from units where company_id = $1 and active order by id limit 1', [ctx.companyId])).rows[0]?.id;
@@ -82,10 +90,11 @@ export async function openSession(db, ctx, b) {
   const settings = await pdvSettings(db, ctx, unitId);
   const { day_cutoff, timezone } = await unitCutoff(db, ctx.companyId, unitId);
   const s = await db.query(
-    `insert into consumption_sessions (company_id, unit_id, kind, card_id, table_id, customer_name, label, service_fee_bp, opened_by, business_date)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning *`,
+    `insert into consumption_sessions (company_id, unit_id, kind, card_id, table_id, customer_name, label, service_fee_bp, opened_by, business_date, customer_id, delivery_fee_cents)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning *`,
     [ctx.companyId, unitId, b.kind, cardId, tableId, b.customer_name ?? null, b.label ?? null,
-      b.kind === 'balcao' || b.kind === 'retirada' ? 0 : settings.service_fee_bp, ctx.userId, businessDate(new Date(), timezone, day_cutoff)]);
+      ['balcao', 'retirada', 'delivery'].includes(b.kind) ? 0 : settings.service_fee_bp, ctx.userId, businessDate(new Date(), timezone, day_cutoff),
+      b.customer_id ?? null, b.delivery_fee_cents ?? 0]);
   if (tableId) await db.query("update dining_tables set status = 'ocupada' where id = $1 and status in ('livre','reservada','limpeza')", [tableId]);
   await audit(db, ctx, 'consumo.aberto', { entity: 'session', entityId: s.rows[0].id, unitId, data: { kind: b.kind, card: cardId, table: tableId } });
   return s.rows[0];
@@ -102,13 +111,14 @@ router.post('/sessions', h(async (req, res) => {
 
 async function loadSessionFull(db, ctx, id) {
   const s = (await db.query(
-    `select s.*, c.number as card_number, t.number as table_number, u.name as opened_by_name
+    `select s.*, c.number as card_number, t.number as table_number, u.name as opened_by_name, cu.points as customer_points,
+            (select count(*)::int from order_items i where i.session_id = s.id and i.status = 'ativo' and i.sent_at is null and i.kitchen_status = 'novo') as pending_send
        from consumption_sessions s left join tab_cards c on c.id = s.card_id left join dining_tables t on t.id = s.table_id
-       left join users u on u.id = s.opened_by where s.id = $1 and s.company_id = $2`, [id, ctx.companyId])).rows[0];
+       left join users u on u.id = s.opened_by left join customers cu on cu.id = s.customer_id where s.id = $1 and s.company_id = $2`, [id, ctx.companyId])).rows[0];
   if (!s) throw notFound('Consumo não encontrado');
   const items = (await db.query(
     `select i.id, i.product_id, i.description, i.qty, i.unit, i.unit_price_cents, i.modifiers, i.modifiers_cents, i.discount_cents,
-            i.total_cents, i.notes, i.status, i.kitchen_status, i.launch_mode, i.created_at, i.cancel_reason, i.transferred_from,
+            i.total_cents, i.notes, i.status, i.kitchen_status, i.launch_mode, i.created_at, i.cancel_reason, i.transferred_from, i.sent_at,
             u.name as user_name
        from order_items i left join users u on u.id = i.user_id where i.session_id = $1 order by i.id`, [id])).rows;
   const payments = (await db.query(
@@ -129,7 +139,7 @@ const itemSchema = z.object({
   qty: z.number().positive().max(9999).optional(),
   option_ids: z.array(z.number().int()).max(40).default([]),
   notes: z.string().trim().max(200).optional(),
-  launch_mode: z.enum(['manual', 'continua', 'dupla', 'excecao', 'balcao']),
+  launch_mode: z.enum(['manual', 'continua', 'dupla', 'excecao', 'balcao', 'delivery']),
   idempotency_key: z.string().regex(/^[A-Za-z0-9_-]{8,80}$/),
   scan: z.object({ card_code: z.string().max(128).optional(), product_code: z.string().max(128).optional() }).optional(),
   price_override_cents: z.number().int().min(0).max(100000000).optional(),
@@ -177,6 +187,9 @@ router.post('/items', need('pdv.lancar'), h(async (req, res) => {
         const a = await consumeAuthorization(db, ctx, b.authorization, 'excecao_dupla_leitura');
         exceptionBy = a.authorized_by;
       }
+    } else if (b.launch_mode === 'delivery') {
+      assertCan(ctx, 'delivery.gerenciar');
+      if (session.kind !== 'delivery') throw bad('Lançamento de delivery só em pedidos de delivery');
     } else {
       // manual / balcão
       if (st.double_read_mandatory) throw forbidden('Dupla leitura obrigatória: use a exceção autorizada para lançar manualmente', 'double_read_required');
@@ -235,10 +248,13 @@ router.post('/items', need('pdv.lancar'), h(async (req, res) => {
 
     const item = (await db.query(
       `insert into order_items (company_id, session_id, product_id, description, qty, unit, unit_price_cents, modifiers, modifiers_cents,
-         discount_cents, total_cents, notes, sector_id, kitchen_status, launch_mode, terminal_id, user_id, idempotency_key)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) returning *`,
+         discount_cents, total_cents, notes, sector_id, kitchen_status, launch_mode, terminal_id, user_id, idempotency_key, sent_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, case when $19::boolean then now() end) returning *`,
       [ctx.companyId, session.id, p.id, p.name, qty, p.unit, unitPrice, JSON.stringify(chosen), modsCents, discount, total,
-        b.notes ?? null, p.sector_id, p.sector_id ? 'novo' : 'nao_produz', b.launch_mode, ctx.terminalId, ctx.userId, b.idempotency_key])).rows[0];
+        b.notes ?? null, p.sector_id, p.sector_id ? 'novo' : 'nao_produz', b.launch_mode, ctx.terminalId, ctx.userId, b.idempotency_key,
+        // envio por lote: o item espera a confirmação "Enviar à produção" (delivery entra na fila ao ser confirmado)
+        !!p.sector_id && st.kitchen_send !== 'lote' && session.kind !== 'delivery'])).rows[0];
+    await consumeForItem(db, ctx, item, p, chosen.map((o) => o.id));
     await db.query('update consumption_sessions set version = version + 1 where id = $1', [session.id]);
     if (b.launch_mode === 'excecao' || Object.keys(overrides).length) {
       await audit(db, ctx, b.launch_mode === 'excecao' ? 'pdv.excecao_manual' : 'pdv.item_ajustado', {
@@ -282,7 +298,8 @@ router.post('/items/:id/cancel', need('pdv.lancar'), h(async (req, res) => {
     if ((await sessionTotals(db, s.id)).balance < 0)
       throw conflict('Cancelar este item deixaria o consumo com pagamento maior que o total. Estorne o pagamento antes.', 'overpaid');
     await db.query('update consumption_sessions set version = version + 1 where id = $1', [s.id]);
-    // Reversão financeira aqui; destino físico do estoque (perda x retorno) é decidido no módulo de estoque
+    // Antes do preparo o insumo volta ao estoque; depois, o consumo permanece como perda
+    if (!afterPrep) await reverseForItem(db, req.ctx, cur.id, `Cancelamento: ${b.reason}`);
     await audit(db, req.ctx, 'pdv.item_cancelado', { entity: 'item', entityId: cur.id, unitId: s.unit_id, reason: b.reason,
       data: { session: s.id, total_cents: cur.total_cents, after_preparation: afterPrep, kitchen_status: cur.kitchen_status, authorized_by: authorizedBy } });
     return { ok: true, after_preparation: afterPrep, totals: await sessionTotals(db, s.id) };
@@ -427,8 +444,9 @@ router.post('/sessions/:id/close', need('pdv.receber'), h(async (req, res) => {
     if (t.items === 0) throw bad('Consumo sem itens: use cancelar');
     await db.query("update consumption_sessions set status = 'encerrada', closed_at = now(), closed_by = $2, version = version + 1 where id = $1", [s.id, req.ctx.userId]);
     if (s.table_id) await freeTableIfEmpty(db, s.table_id);
+    const earned = await earnPoints(db, req.ctx, s, t.items);
     await audit(db, req.ctx, 'consumo.encerrado', { entity: 'session', entityId: s.id, unitId: s.unit_id, data: t });
-    return { ok: true, totals: t };
+    return { ok: true, totals: t, points_earned: earned?.points || 0 };
   }));
 }));
 
@@ -441,6 +459,8 @@ router.post('/sessions/:id/cancel', need('pdv.lancar'), h(async (req, res) => {
     if (t.paid > 0) throw conflict('Há pagamentos confirmados: estorne antes de cancelar', 'has_payments');
     let by = null;
     if (t.items > 0 && !req.ctx.can('pdv.cancelar_venda')) by = (await consumeAuthorization(db, req.ctx, b.authorization, 'cancelar_venda')).authorized_by;
+    const before = (await db.query(`select id from order_items where session_id = $1 and status = 'ativo' and kitchen_status in ('novo','aceito','nao_produz')`, [s.id])).rows;
+    for (const it of before) await reverseForItem(db, req.ctx, it.id, `Consumo cancelado: ${b.reason}`);
     await db.query(`update order_items set status = 'cancelado', cancel_reason = $2, canceled_by = $3, canceled_at = now(),
                       kitchen_status = case when kitchen_status = 'nao_produz' then kitchen_status else 'cancelado' end
                     where session_id = $1 and status = 'ativo'`, [s.id, `Consumo cancelado: ${b.reason}`, req.ctx.userId]);
@@ -464,6 +484,7 @@ router.post('/sessions/:id/reopen', need('pdv.lancar'), h(async (req, res) => {
     }
     // Documentos fiscais emitidos nunca são sobrescritos (módulo fiscal registra a pendência)
     await db.query("update consumption_sessions set status = 'aberta', closed_at = null, closed_by = null, version = version + 1 where id = $1", [s.id]);
+    await reverseEarn(db, req.ctx, s.id, 'Consumo reaberto');
     if (s.table_id) await db.query("update dining_tables set status = 'ocupada' where id = $1", [s.table_id]);
     await audit(db, req.ctx, 'consumo.reaberto', { entity: 'session', entityId: s.id, reason: b.reason, data: { authorized_by: by } });
     return { ok: true };
@@ -536,8 +557,21 @@ router.post('/payments/:id/refund', need('financeiro.estornar'), h(async (req, r
                               where id = $1 and status = 'confirmado' returning id`, [p.id, b.reason, req.ctx.userId]);
     if (!r.rows[0]) throw conflict('Pagamento já estornado');
     await db.query('update consumption_sessions set version = version + 1 where id = $1', [s.id]);
+    await reverseRedeemByPayment(db, req.ctx, p.id);
     await audit(db, req.ctx, 'pagamento.estornado', { entity: 'payment', entityId: p.id, reason: b.reason, data: { amount_cents: p.amount_cents, method: p.method } });
     return { ok: true, totals: await sessionTotals(db, s.id) };
+  }));
+}));
+
+// ---- Envio por lote à produção: itens aguardando confirmação entram na fila de uma vez ----
+router.post('/sessions/:id/send', need('pdv.lancar'), h(async (req, res) => {
+  res.json(await tx(async (db) => {
+    const s = await lockSession(db, req.ctx.companyId, Number(req.params.id));
+    assertUnitScope(req.ctx, s.unit_id);
+    const r = await db.query(`update order_items set sent_at = now() where session_id = $1 and status = 'ativo' and sent_at is null
+      and kitchen_status = 'novo' returning id`, [s.id]);
+    if (r.rowCount) await audit(db, req.ctx, 'producao.lote_enviado', { entity: 'session', entityId: s.id, data: { items: r.rowCount } });
+    return { sent: r.rowCount };
   }));
 }));
 

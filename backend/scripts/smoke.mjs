@@ -540,6 +540,203 @@ await check('portal da assinatura repassa à central', async () => {
 });
 
 // ---------- Segurança e auditoria ----------
+// ---------- Módulos: clientes, cozinha, estoque, delivery, relatórios, marketing, agente ----------
+const C = await register('Pub Garagem', 'c@teste.dev');
+const apiC = client(C.token, C.terminal);
+const bProducts = (await apiC('GET', '/api/menu/products')).data;
+const bIpa = bProducts.find((p) => p.name.startsWith('Cerveja IPA'));
+const bBurger = bProducts.find((p) => p.name.startsWith('Hambúrguer'));
+const bCards = (await apiC('GET', '/api/floor/cards')).data.cards;
+await apiC('POST', '/api/cash/open', { opening_cents: 0 });
+let custId;
+await check('cliente: CPF inválido recusado; cadastro e busca pelo CPF preenchem a comanda', async () => {
+  assert.equal((await apiC('POST', '/api/customers', { name: 'Ana', cpf: '111.111.111-11' })).status, 400);
+  const c = await apiC('POST', '/api/customers', { name: 'Ana Souza', cpf: '529.982.247-25', phone: '(11) 98888-7777', consent_whatsapp: true });
+  assert.equal(c.status, 201, JSON.stringify(c.data)); custId = c.data.id;
+  assert.equal((await apiC('POST', '/api/customers', { name: 'Outra', cpf: '52998224725' })).status, 409);
+  const l = await apiC('GET', '/api/customers/lookup?cpf=52998224725');
+  assert.equal(l.data.found, true); assert.equal(l.data.customer.name, 'Ana Souza');
+  assert.equal((await apiC('GET', '/api/customers/lookup?cpf=39053344705')).data.found, false);
+  assert.equal((await api('GET', '/api/customers/lookup?cpf=52998224725')).data.found, false, 'outra empresa não enxerga');
+  const s = await apiC('POST', '/api/pdv/sessions', { kind: 'comanda', card_id: bCards[0].id, customer_id: custId });
+  assert.equal(s.status, 201); assert.equal(s.data.customer_name, 'Ana Souza');
+});
+await check('fidelidade: pontos no encerramento, resgate como pagamento e reversão no estorno', async () => {
+  await pool.query(`update companies set settings = jsonb_set(settings, '{loyalty}', '{"enabled":true,"cents_per_point":100,"point_value_cents":5,"validity_days":365,"min_redeem":10}') where id = $1`, [C.me.company.id]);
+  const s = (await apiC('GET', '/api/pdv/sessions')).data.find((x) => x.card_number === bCards[0].number);
+  await apiC('POST', '/api/pdv/items', { session_id: s.id, product_id: bIpa.id, qty: 2, launch_mode: 'manual', idempotency_key: key() });
+  let full = (await apiC('GET', `/api/pdv/sessions/${s.id}`)).data;
+  await apiC('POST', `/api/pdv/sessions/${s.id}/payments`, { method: 'pix', amount_cents: full.totals.balance, idempotency_key: key() });
+  full = (await apiC('GET', `/api/pdv/sessions/${s.id}`)).data;
+  const cl = await apiC('POST', `/api/pdv/sessions/${s.id}/close`, { version: full.version });
+  assert.equal(cl.status, 200, JSON.stringify(cl.data)); assert.equal(cl.data.points_earned, 57);
+  const s2 = await apiC('POST', '/api/pdv/sessions', { kind: 'comanda', card_id: bCards[1].id, customer_id: custId });
+  await apiC('POST', '/api/pdv/items', { session_id: s2.data.id, product_id: bIpa.id, launch_mode: 'manual', idempotency_key: key() });
+  const rd = await apiC('POST', `/api/customers/${custId}/redeem`, { session_id: s2.data.id, points: 20, idempotency_key: key() });
+  assert.equal(rd.status, 201, JSON.stringify(rd.data)); assert.equal(rd.data.payment.amount_cents, 100);
+  assert.equal((await apiC('GET', `/api/customers/${custId}`)).data.customer.points, 37);
+  await apiC('POST', `/api/pdv/payments/${rd.data.payment.id}/refund`, { reason: 'cliente desistiu' });
+  const det = (await apiC('GET', `/api/customers/${custId}`)).data;
+  assert.equal(det.customer.points, 57); assert.equal(det.history.length, 2);
+});
+await check('cozinha: item entra na fila, segue o fluxo e cancelamento exige ciência', async () => {
+  const s = (await apiC('GET', '/api/pdv/sessions')).data.find((x) => x.card_number === bCards[1].number);
+  const it = await apiC('POST', '/api/pdv/items', { session_id: s.id, product_id: bBurger.id, option_ids: [bBurger.groups[0].options[1].id], launch_mode: 'manual', idempotency_key: key() });
+  const qu = (await apiC('GET', '/api/kitchen/queue')).data.items;
+  const k = qu.find((x) => x.id === it.data.item.id);
+  assert.ok(k && k.kitchen_status === 'novo');
+  assert.equal((await apiC('POST', `/api/kitchen/items/${k.id}/status`, { to: 'preparando', from: 'novo' })).status, 200);
+  assert.equal((await apiC('POST', `/api/kitchen/items/${k.id}/status`, { to: 'preparando' })).data.replay, true);
+  assert.equal((await apiC('POST', `/api/kitchen/items/${k.id}/status`, { to: 'aceito', from: 'novo' })).status, 409);
+  await apiC('POST', `/api/pdv/items/${k.id}/cancel`, { reason: 'cliente mudou o pedido' });
+  const after = (await apiC('GET', '/api/kitchen/queue')).data.items.find((x) => x.id === k.id);
+  assert.equal(after.kitchen_status, 'cancelado', 'cancelado continua visível');
+  await apiC('POST', `/api/kitchen/items/${k.id}/ack-cancel`);
+  assert.ok(!(await apiC('GET', '/api/kitchen/queue')).data.items.find((x) => x.id === k.id));
+});
+await check('envio por lote: item espera confirmação antes de ir à cozinha', async () => {
+  await apiC('PUT', '/api/admin/pdv-settings/company', { settings: { kitchen_send: 'lote' } });
+  const s = (await apiC('GET', '/api/pdv/sessions')).data.find((x) => x.card_number === bCards[1].number);
+  const it = await apiC('POST', '/api/pdv/items', { session_id: s.id, product_id: bBurger.id, option_ids: [bBurger.groups[0].options[0].id], launch_mode: 'manual', idempotency_key: key() });
+  assert.ok(!(await apiC('GET', '/api/kitchen/queue')).data.items.find((x) => x.id === it.data.item.id));
+  assert.equal((await apiC('POST', `/api/pdv/sessions/${s.id}/send`)).data.sent, 1);
+  assert.ok((await apiC('GET', '/api/kitchen/queue')).data.items.find((x) => x.id === it.data.item.id));
+  await apiC('PUT', '/api/admin/pdv-settings/company', { settings: { kitchen_send: 'imediato' } });
+});
+let carne;
+await check('estoque: ficha técnica baixa insumos na venda e estorna no cancelamento antes do preparo', async () => {
+  const c1 = await apiC('POST', '/api/stock/items', { name: 'Carne moída', unit: 'kg', min_qty: 2, initial_qty: 10, unit_cost_cents: 3000 });
+  const c2 = await apiC('POST', '/api/stock/items', { name: 'Pão brioche', unit: 'un', initial_qty: 40, unit_cost_cents: 150 });
+  carne = c1.data.id;
+  const r = await apiC('PUT', `/api/stock/recipes/${bBurger.id}`, { stock_mode: 'ficha', yield_qty: 1, lines: [{ stock_item_id: c1.data.id, qty: 0.18, loss_pct: 0 }, { stock_item_id: c2.data.id, qty: 1 }] });
+  assert.equal(r.status, 200, JSON.stringify(r.data)); assert.equal(r.data.version, 1); assert.equal(r.data.cost_cents, 690);
+  const s = (await apiC('GET', '/api/pdv/sessions')).data.find((x) => x.card_number === bCards[1].number);
+  const it = await apiC('POST', '/api/pdv/items', { session_id: s.id, product_id: bBurger.id, qty: 2, option_ids: [bBurger.groups[0].options[0].id], launch_mode: 'manual', idempotency_key: key() });
+  let items = (await apiC('GET', '/api/stock/items')).data;
+  assert.equal(items.find((x) => x.id === c1.data.id).balance, 9.64);
+  assert.equal(items.find((x) => x.id === c2.data.id).balance, 38);
+  await apiC('POST', `/api/pdv/items/${it.data.item.id}/cancel`, { reason: 'lançado errado' });
+  items = (await apiC('GET', '/api/stock/items')).data;
+  assert.equal(items.find((x) => x.id === c1.data.id).balance, 10);
+  assert.equal((await apiC('PUT', `/api/stock/recipes/${bBurger.id}`, { stock_mode: 'ficha', lines: [{ stock_item_id: c1.data.id, qty: 0.2 }, { stock_item_id: c2.data.id, qty: 1 }] })).data.version, 2);
+  await assert.rejects(pool.query('delete from stock_movements where company_id = $1', [C.me.company.id]));
+});
+await check('estoque: política sem saldo negativo bloqueia; compra parcial atualiza custo médio', async () => {
+  const pils = await apiC('POST', '/api/stock/items', { name: 'Pilsen (garrafa)', unit: 'un', initial_qty: 1, unit_cost_cents: 400 });
+  const pilsProd = bProducts.find((p) => p.name.startsWith('Pilsen'));
+  await apiC('PUT', `/api/stock/recipes/${pilsProd.id}`, { stock_mode: 'acabado', stock_item_id: pils.data.id });
+  await apiC('PUT', '/api/stock/settings', { enabled: true, allow_negative: false });
+  const s = (await apiC('GET', '/api/pdv/sessions')).data.find((x) => x.card_number === bCards[1].number);
+  assert.equal((await apiC('POST', '/api/pdv/items', { session_id: s.id, product_id: pilsProd.id, qty: 2, launch_mode: 'manual', idempotency_key: key() })).data.code, 'stock_insufficient');
+  const pu = await apiC('POST', '/api/stock/purchases', { supplier: 'Distribuidora', lines: [{ stock_item_id: pils.data.id, qty: 10, unit_cost_cents: 500 }] });
+  const lineId = (await apiC('GET', '/api/stock/purchases')).data.find((x) => x.id === pu.data.id).lines[0].id;
+  assert.equal((await apiC('POST', `/api/stock/purchases/${pu.data.id}/receive`, { lines: [{ line_id: lineId, qty: 4 }] })).data.status, 'parcial');
+  assert.equal((await apiC('POST', `/api/stock/purchases/${pu.data.id}/receive`, { lines: [{ line_id: lineId, qty: 7 }] })).status, 400);
+  const it = (await apiC('GET', '/api/stock/items')).data.find((x) => x.id === pils.data.id);
+  assert.equal(it.balance, 5); assert.equal(it.avg_cost_cents, 480);
+  assert.equal((await apiC('POST', '/api/pdv/items', { session_id: s.id, product_id: pilsProd.id, qty: 2, launch_mode: 'manual', idempotency_key: key() })).status, 201);
+  await apiC('PUT', '/api/stock/settings', { enabled: true, allow_negative: true });
+});
+await check('inventário: divergência aprovada vira ajuste vinculado', async () => {
+  const inv = await apiC('POST', '/api/stock/inventories', { counts: [{ stock_item_id: carne, counted: 9.5 }] });
+  assert.equal(inv.data.lines[0].diff, -0.5);
+  const ap = await apiC('POST', `/api/stock/inventories/${inv.data.id}/approve`);
+  assert.equal(ap.status, 200, JSON.stringify(ap.data)); assert.equal(ap.data.adjustments, 1);
+  assert.equal((await apiC('GET', '/api/stock/items')).data.find((x) => x.id === carne).balance, 9.5);
+});
+let dlvToken;
+await check('delivery: pedido público validado no servidor, sem duplicar, e acompanhamento', async () => {
+  const cfg = { slug: 'pub-garagem', enabled: true, accepting: true, delivery: true, pickup: true, fee_cents: 800, min_order_cents: 3000, eta_minutes: 40,
+    hours: 'Ter a dom, 18h às 0h', areas: 'Centro', message: '', payment_methods: ['dinheiro', 'pix'] };
+  assert.equal((await apiC('PUT', '/api/delivery/settings', cfg)).status, 200);
+  const menu = await anon('GET', '/api/public/pub-garagem/menu');
+  assert.equal(menu.status, 200); assert.ok(menu.data.products.length >= 5);
+  const order = { mode: 'entrega', customer_name: 'Bruno Lima', phone: '11977776666', address: { street: 'Rua A', number: '10' }, payment_hint: 'pix',
+    cart: [{ product_id: bIpa.id, qty: 1 }], client_key: key() };
+  const small = await anon('POST', '/api/public/pub-garagem/orders', order);
+  assert.equal(small.data.code, 'min_order', JSON.stringify(small.data));
+  order.cart = [{ product_id: bIpa.id, qty: 2, unit_price_cents: 1 }];
+  const r = await anon('POST', '/api/public/pub-garagem/orders', order);
+  assert.equal(r.status, 201, JSON.stringify(r.data)); dlvToken = r.data.token;
+  const again = await anon('POST', '/api/public/pub-garagem/orders', order);
+  assert.equal(again.status, 200); assert.equal(again.data.number, r.data.number);
+  const tr = await anon('GET', `/api/public/orders/${dlvToken}`);
+  assert.equal(tr.data.totals.total, 2 * 2890 + 800); assert.equal(tr.data.status, 'recebido'); assert.ok(!('phone' in tr.data));
+  const orders = (await apiC('GET', '/api/delivery/orders?status=abertos')).data;
+  const o = orders.find((x) => x.number === r.data.number);
+  assert.equal((await apiC('POST', `/api/delivery/orders/${o.id}/status`, { to: 'saiu' })).status, 409);
+  for (const to of ['confirmado', 'pronto', 'saiu']) assert.equal((await apiC('POST', `/api/delivery/orders/${o.id}/status`, { to })).status, 200);
+  assert.equal((await apiC('POST', `/api/delivery/orders/${o.id}/status`, { to: 'entregue' })).data.code, 'balance_pending');
+  await apiC('POST', `/api/pdv/sessions/${o.session_id}/payments`, { method: 'pix', amount_cents: 6580, idempotency_key: key() });
+  assert.equal((await apiC('POST', `/api/delivery/orders/${o.id}/status`, { to: 'entregue' })).status, 200);
+  assert.equal((await anon('GET', `/api/public/orders/${dlvToken}`)).data.status, 'entregue');
+  assert.equal((await anon('GET', '/api/public/orders/token-que-nao-existe-123')).status, 404);
+});
+await check('relatórios: totais por período, CMV só com permissão e exportação sem fórmulas', async () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const from = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
+  const r = await apiC('GET', `/api/reports/overview?from=${from}&to=${today}`);
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.ok(r.data.summary.sessions >= 1); assert.ok(r.data.summary.revenue_cents > 0); assert.ok(r.data.by_product.length);
+  assert.ok(r.data.summary.cmv_cents != null);
+  const csv = await apiC('GET', `/api/reports/export?section=produtos&from=${from}&to=${today}`);
+  assert.equal(csv.status, 200); assert.match(csv.data, /Produto;/);
+});
+await check('avaliação pós-consumo por link assinado; marketing respeita consentimento', async () => {
+  const s = (await pool.query("select id from consumption_sessions where company_id = $1 and status = 'encerrada' and customer_id is not null limit 1", [C.me.company.id])).rows[0];
+  const link = (await apiC('GET', `/api/marketing/review-link/${s.id}`)).data;
+  assert.equal((await anon('POST', `/api/public/review/${s.id}.forjado1234567`, { score: 5 })).status, 404);
+  assert.equal((await anon('POST', `/api/public/review/${link.token}`, { score: 2, comment: 'Demorou' })).status, 201);
+  assert.equal((await anon('POST', `/api/public/review/${link.token}`, { score: 5 })).status, 409);
+  const rv = (await apiC('GET', '/api/marketing/reviews')).data;
+  assert.equal(rv.stats.pending, 1);
+  await apiC('POST', '/api/customers', { name: 'Sem consentimento', phone: '11955554444' });
+  const pv = await apiC('POST', '/api/marketing/segments/preview', { channel: 'whatsapp', segment: {} });
+  assert.equal(pv.data.recipients, 1);
+  const camp = await apiC('POST', '/api/marketing/campaigns', { name: 'Volta', channel: 'whatsapp', segment: {}, message: 'Oi {nome}, temos novidade no {empresa}!' });
+  assert.equal((await apiC('POST', `/api/marketing/campaigns/${camp.data.id}/prepare`)).data.recipients, 1);
+  const rec = (await apiC('GET', `/api/marketing/campaigns/${camp.data.id}/recipients?base=https://x.dev`)).data;
+  assert.match(rec[0].message, /^Oi Ana, temos novidade no Pub Garagem!/);
+  const unsub = rec[0].message.match(/\/sair\/(\S+)/)[1];
+  assert.equal((await anon('POST', `/api/public/unsubscribe/${unsub}`)).status, 200);
+  assert.equal((await apiC('POST', '/api/marketing/segments/preview', { channel: 'whatsapp', segment: {} })).data.recipients, 0);
+  const send = await apiC('POST', `/api/marketing/campaigns/${camp.data.id}/send`, { base_url: 'https://x.dev' });
+  assert.equal(send.data.sent, 0);
+});
+await check('agente: simulador monta pedido sem criar venda; webhook exige assinatura', async () => {
+  const sim = (body) => apiC('POST', '/api/agent/simulate', { body, contact: 't1' });
+  assert.match((await sim('oi')).data.replies[0], /cardápio/);
+  assert.match((await sim('quanto custa a caipirinha?')).data.replies[0], /Caipirinha.*24,00/);
+  await sim('quero fazer um pedido');
+  assert.match((await sim('2 pilsen')).data.replies[0], /2× Pilsen/);
+  await sim('finalizar'); await sim('retirada');
+  assert.match((await sim('Carla')).data.replies[0], /Total: R\$ 25,80/);
+  const before = (await pool.query('select count(*)::int as n from delivery_orders where company_id = $1', [C.me.company.id])).rows[0].n;
+  assert.match((await sim('confirmar')).data.replies[0], /Simulação/);
+  assert.equal((await pool.query('select count(*)::int as n from delivery_orders where company_id = $1', [C.me.company.id])).rows[0].n, before);
+  assert.equal((await sim('quero falar com um atendente')).data.handoff, true);
+  const bad = await fetch(`${base}/api/public/whatsapp/pub-garagem`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': 'sha256=00' }, body: '{}' });
+  assert.equal(bad.status, 403);
+  await apiC('PUT', '/api/agent/secrets', { wa_app_secret: 'segredo-app-teste' });
+  const settings = (await apiC('GET', '/api/agent/settings')).data;
+  assert.equal(settings.secrets.wa_app_secret, true); assert.ok(!JSON.stringify(settings).includes('segredo-app-teste'));
+  const bad2 = await fetch(`${base}/api/public/whatsapp/pub-garagem`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': 'sha256=00' }, body: '{}' });
+  assert.equal(bad2.status, 401);
+  const body = JSON.stringify({ entry: [{ changes: [{ value: { contacts: [{ wa_id: '5511999990000', profile: { name: 'Dani' } }], messages: [{ id: 'wamid.1', from: '5511999990000', type: 'text', text: { body: 'horário' } }] } }] }] });
+  const sig = `sha256=${crypto.createHmac('sha256', 'segredo-app-teste').update(body).digest('hex')}`;
+  const ok = await fetch(`${base}/api/public/whatsapp/pub-garagem`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': sig }, body });
+  assert.equal(ok.status, 200);
+  await fetch(`${base}/api/public/whatsapp/pub-garagem`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': sig }, body });
+  const convs = (await apiC('GET', '/api/agent/conversations')).data;
+  const conv = (await apiC('GET', `/api/agent/conversations/${convs[0].id}`)).data;
+  assert.equal(conv.messages.filter((m) => m.direction === 'in').length, 1, 'webhook reentregue não duplica');
+});
+await check('módulos isolados por empresa', async () => {
+  assert.equal((await api('GET', `/api/customers/${custId}`)).status, 404);
+  assert.ok(!(await api('GET', '/api/stock/items')).data.find((x) => x.id === carne));
+  assert.equal((await api('GET', '/api/delivery/orders')).data.length, 0);
+});
+
 await check('auditoria é somente inclusão', async () => {
   await assert.rejects(pool.query('update audit_events set action = $1 where id = 1', ['x']));
   await assert.rejects(pool.query('delete from audit_events where id = 1'));

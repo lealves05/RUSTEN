@@ -14,6 +14,15 @@ import { router as floorRouter } from './routes/floor.js';
 import { router as pdvRouter } from './routes/pdv.js';
 import { router as cashRouter } from './routes/cash.js';
 import { router as homeRouter } from './routes/home.js';
+import { router as customersRouter } from './routes/customers.js';
+import { router as kitchenRouter } from './routes/kitchen.js';
+import { router as stockRouter } from './routes/stock.js';
+import { router as reportsRouter } from './routes/reports.js';
+import { router as deliveryRouter } from './routes/delivery.js';
+import { router as marketingRouter } from './routes/marketing.js';
+import { router as agentRouter } from './routes/agent.js';
+import { router as reservationsRouter } from './routes/reservations.js';
+import { router as publicRouter } from './routes/public.js';
 import { platformRouter, cronRouter, accessRouter } from './routes/platform.js';
 import { flushOutbox } from './lib/platform.js';
 import { env } from './lib/env.js';
@@ -36,6 +45,7 @@ export function createApp() {
   app.use('/api/platform/v1', platformRouter);
   app.use('/api/cron', cronRouter);
   app.use('/api/access', accessRouter); // funciona com acesso bloqueado (regularização)
+  app.use('/api/public', publicRouter); // cardápio digital, pedidos online, avaliação e webhook do WhatsApp
 
   const gated = [auth(), requireAccess()];
   app.use('/api/admin', ...gated, adminRouter);
@@ -44,6 +54,14 @@ export function createApp() {
   app.use('/api/floor', ...gated, floorRouter);
   app.use('/api/pdv', ...gated, requireAccess('pdv'), pdvRouter);
   app.use('/api/cash', ...gated, requireAccess('pdv'), cashRouter);
+  app.use('/api/customers', ...gated, requireAccess('clientes'), customersRouter);
+  app.use('/api/kitchen', ...gated, requireAccess('cozinha'), kitchenRouter);
+  app.use('/api/stock', ...gated, requireAccess('estoque'), stockRouter);
+  app.use('/api/reports', ...gated, requireAccess('relatorios'), reportsRouter);
+  app.use('/api/delivery', ...gated, requireAccess('delivery'), deliveryRouter);
+  app.use('/api/marketing', ...gated, requireAccess('marketing'), marketingRouter);
+  app.use('/api/agent', ...gated, requireAccess('agente'), agentRouter);
+  app.use('/api/reservations', ...gated, requireAccess('salao'), reservationsRouter);
 
   app.use('/api', (_req, _res, next) => next(new HttpError(404, 'Rota não encontrada', 'not_found')));
 

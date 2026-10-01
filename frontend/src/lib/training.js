@@ -60,8 +60,8 @@ export const LESSONS = [
     desc: 'Cardápio, preços, pedidos e reservas no WhatsApp, com passagem para a equipe.', learn: ['Testar no simulador', 'Pedido com resumo e confirmação', 'Caixa de entrada e integração oficial'] },
   { n: 21, file: '21-lancar-nota-no-estoque', mod: 'estoque', s: 61, title: 'Lançar a nota no estoque (foto, XML ou manual)', routes: [],
     desc: 'Foto da nota ou XML da NF-e: o sistema lê, você confere e tudo entra no estoque.', learn: ['Fotografar ou importar o XML', 'Conferir e converter embalagens', 'O sistema aprende cada fornecedor'] },
-  { n: 22, file: '22-painel-da-tv', mod: 'cozinha', s: 82, title: 'Painel da TV: chamada dos pedidos', routes: ['/painel-tv'],
-    desc: 'A fila em preparo e a chamada em destaque, com som e voz, quando o pedido fica pronto.', learn: ['Abrir o painel numa TV', 'Chamada automática ao marcar Pronto', 'Fundo, som e tipo de letra'] },
+  { n: 22, file: '22-painel-da-tv', mod: 'cozinha', s: 102, title: 'Painel da TV: chamada dos pedidos', routes: ['/painel-tv'],
+    desc: 'A fila em preparo e a chamada com fogos de artifício, som e voz quando o pedido fica pronto.', learn: ['Abrir o painel numa TV', 'Tudo pronto e Chamar na TV', 'Fogos, fundo, som e tipo de letra'] },
 ];
 
 export const videoUrl = (l) => `/treinamento/${l.file}.mp4`;

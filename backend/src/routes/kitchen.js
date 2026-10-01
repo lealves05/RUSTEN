@@ -131,7 +131,7 @@ router.get('/stats', need('cozinha.operar'), h(async (req, res) => {
 }));
 
 /* Painel da TV (retirada): pedidos em preparo e prontos, por comanda/mesa/pedido.
-   Mostra só número, primeiro nome e itens — nada de valores. */
+   Mostra só número, primeiro nome e itens — nada de valores. `version` muda a cada evento da cozinha. */
 router.get('/board', anyOf('pdv.lancar', 'cozinha.operar'), h(async (req, res) => {
   const unit = req.ctx.terminalUnitId || req.ctx.unitId;
   const params = [req.ctx.companyId];
@@ -152,25 +152,30 @@ router.get('/board', anyOf('pdv.lancar', 'cozinha.operar'), h(async (req, res) =
      order by min(i.sent_at)
      limit 120`, params)).rows;
   const first = (n) => (n ? String(n).trim().split(/\s+/)[0] : null);
+  const version = (await q('select coalesce(max(id),0)::bigint as id from kitchen_events where company_id = $1', [req.ctx.companyId])).rows[0].id;
   res.set('cache-control', 'no-store');
-  res.json({ now: new Date().toISOString(), orders: rows.map((r) => ({
+  res.json({ now: new Date().toISOString(), version: String(version), orders: rows.map((r) => ({
     id: r.id,
     code: r.delivery_number ? `#${r.delivery_number}` : r.card_number ? String(r.card_number) : r.table_number ? String(r.table_number) : String(r.id),
     kind: r.delivery_number ? (r.delivery_mode === 'retirada' ? 'retirada' : 'delivery') : r.card_number ? 'comanda' : r.table_number ? 'mesa' : r.kind,
     table: r.card_number && r.table_number ? r.table_number : null,
     name: first(r.customer_name),
-    status: r.pending > 0 ? 'preparando' : 'pronto',
+    // Pronto assim que houver item pronto para retirar (mesmo que outro setor, ex.: bar, ainda esteja preparando)
+    status: r.ready > 0 ? 'pronto' : 'preparando',
     partial: r.pending > 0 && r.ready > 0,
+    pending: r.pending, ready_count: r.ready,
     sent_at: r.sent_at, ready_at: r.ready_at, called_at: r.called_at,
     items: r.items.map((x) => ({ d: x.d, q: Number(x.q), ready: x.s === 'pronto' })),
   })) });
 }));
 
-// Chamar de novo no painel (ex.: cliente não veio buscar)
+// Chamar no painel da TV (destaque com fogos): qualquer pedido que esteja na produção ou pronto
 router.post('/sessions/:id/call', anyOf('pdv.lancar', 'cozinha.operar'), h(async (req, res) => {
-  const it = (await q(`select id from order_items where session_id = $1 and company_id = $2 and status = 'ativo' and kitchen_status = 'pronto' order by id desc limit 1`,
+  const it = (await q(`select id, kitchen_status from order_items where session_id = $1 and company_id = $2 and status = 'ativo' and sent_at is not null
+      and kitchen_status in ('novo','aceito','preparando','pronto') order by (kitchen_status = 'pronto') desc, id desc limit 1`,
     [Number(req.params.id), req.ctx.companyId])).rows[0];
-  if (!it) throw conflict('Nenhum item pronto neste pedido', 'nothing_ready');
-  await q(`insert into kitchen_events (company_id, item_id, from_status, to_status, user_id) values ($1,$2,'pronto','chamado',$3)`, [req.ctx.companyId, it.id, req.ctx.userId]);
-  res.json({ ok: true });
+  if (!it) throw conflict('Este pedido não está mais no painel', 'nothing_to_call');
+  const ev = (await q(`insert into kitchen_events (company_id, item_id, from_status, to_status, user_id) values ($1,$2,$3,'chamado',$4) returning created_at`,
+    [req.ctx.companyId, it.id, it.kitchen_status, req.ctx.userId])).rows[0];
+  res.json({ ok: true, called_at: ev.created_at });
 }));

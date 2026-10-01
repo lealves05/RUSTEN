@@ -26,12 +26,21 @@ export class ApiError extends Error {
 }
 
 let refreshing = null;
+// Renovação única entre abas (ex.: Cozinha e Painel da TV no mesmo navegador): o servidor troca o token a cada
+// renovação e trata o reuso do antigo como roubo, então só uma aba renova e as outras aproveitam o token novo.
 async function refresh() {
-  if (!tokens.refresh) return false;
-  refreshing ||= fetch(`${BASE}/api/auth/refresh`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ refresh_token: tokens.refresh }),
-  }).then(async (r) => { if (!r.ok) { tokens.clear(); return false; } tokens.save(await r.json()); return true; })
-    .catch(() => false).finally(() => { setTimeout(() => { refreshing = null; }, 0); });
+  const used = tokens.refresh;
+  if (!used) return false;
+  const run = async () => {
+    if (tokens.refresh && tokens.refresh !== used) return true; // outra aba já renovou
+    if (!tokens.refresh) return false;
+    return fetch(`${BASE}/api/auth/refresh`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ refresh_token: tokens.refresh }),
+    }).then(async (r) => { if (!r.ok) { tokens.clear(); return false; } tokens.save(await r.json()); return true; })
+      .catch(() => false);
+  };
+  refreshing ||= (navigator.locks?.request ? navigator.locks.request('rusten-refresh', run) : run())
+    .finally(() => { setTimeout(() => { refreshing = null; }, 0); });
   return refreshing;
 }
 
@@ -53,9 +62,9 @@ export async function api(path, { method = 'GET', body, retry = true, signal } =
     err.uncertain = method !== 'GET'; // o servidor pode ter recebido: consultar antes de repetir
     throw err;
   }
-  if (res.status === 401 && retry && tokens.refresh && !path.startsWith('/api/auth/')) {
-    if (await refresh()) return api(path, { method, body, retry: false, signal });
-    listeners.forEach((fn) => fn());
+  if (res.status === 401 && retry && !path.startsWith('/api/auth/')) {
+    if (tokens.refresh && await refresh()) return api(path, { method, body, retry: false, signal });
+    listeners.forEach((fn) => fn()); // sessão encerrada (ex.: "Sair" em outra aba): volta para o login
   }
   const text = await res.text();
   let data = null;

@@ -1,6 +1,6 @@
 // Estoque: insumos e saldos, fichas técnicas versionadas, compras com recebimento parcial, inventário e produção.
 import { useEffect, useState } from 'react';
-import { Camera, CheckCircle2, ClipboardCheck, FileCode2, KeyRound, Loader2, Package, Plus, ShoppingCart, Trash2 } from 'lucide-react';
+import { Camera, CheckCircle2, ClipboardCheck, FileCode2, Keyboard, KeyRound, Loader2, Package, Plus, ShoppingCart, Trash2 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { money, dateTime, parseCents, centsToInput } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
@@ -462,6 +462,8 @@ function NoteImport({ stock, onDone }) {
       setDoc({ ...n, source: 'xml', lines: toLines(r.items) });
     } catch (x) { setErr(x); } finally { setBusy(null); }
   };
+  const blankLine = () => ({ description: '', alias: '', match: 'novo', note_unit: '', qty: '1', factor: '1', cost: '', target: stock[0] ? String(stock[0].id) : 'novo', new_name: '', new_unit: 'un', manual: true });
+  const manual = () => { setErr(null); setPreview(null); setDoc({ supplier: '', document: '', due_date: '', source: 'manual', warnings: [], total: null, lines: [blankLine()] }); };
   const saveKey = async () => { try { await api('/api/stock/notes/key', { method: 'PUT', body: { api_key: key } }); setKey(''); status.reload(); toast('Leitura por foto ativada'); } catch (x) { toast(x.message, 'bad'); } };
   const setLine = (i, patch) => setDoc({ ...doc, lines: doc.lines.map((l, j) => (j === i ? { ...l, ...patch } : l)) });
   const total = doc ? doc.lines.reduce((a, l) => a + Math.round(num(l.qty || 0) * (parseCents(l.cost || '0') || 0)), 0) : 0;
@@ -470,7 +472,7 @@ function NoteImport({ stock, onDone }) {
     try {
       const r = await api('/api/stock/notes/confirm', { method: 'POST', body: { supplier: doc.supplier || '', document: doc.document || null, due_date: doc.due_date || null,
         source: doc.source, nfe_key: doc.nfe_key || null, receive: true,
-        lines: doc.lines.map((l) => ({ description: l.description, alias: l.alias, qty: num(l.qty), factor: num(l.factor) || 1, unit_cost_cents: parseCents(l.cost || '0') ?? 0,
+        lines: doc.lines.map((l) => ({ description: l.description || (l.target !== 'novo' ? stock.find((x) => String(x.id) === l.target)?.name : l.new_name) || 'item', alias: l.alias, qty: num(l.qty), factor: num(l.factor) || 1, unit_cost_cents: parseCents(l.cost || '0') ?? 0,
           stock_item_id: l.target !== 'novo' ? Number(l.target) : null, new_item: l.target === 'novo' ? { name: l.new_name, unit: l.new_unit } : null })) } });
       toast(`Compra #${r.purchase_id} lançada: ${r.lines} item(ns) entraram no estoque`); setDoc(null); setPreview(null); onDone();
     } catch (x) { setErr(x); } finally { setBusy(null); }
@@ -479,7 +481,7 @@ function NoteImport({ stock, onDone }) {
   return (
     <div className="space-y-4">
       {!doc && (
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-3 md:grid-cols-3">
           <label className={`card flex cursor-pointer flex-col items-center gap-2 p-6 text-center hover:border-copper ${!status.data?.photo ? 'opacity-60' : ''}`}>
             <Camera size={36} className="text-copper" />
             <span className="font-display text-2xl">Fotografar nota ou pedido</span>
@@ -493,6 +495,11 @@ function NoteImport({ stock, onDone }) {
             <span className="text-sm text-muted">O arquivo .xml que o fornecedor envia por e-mail. Leitura exata, sem IA, e a mesma nota não entra duas vezes.</span>
             <input type="file" accept=".xml,text/xml,application/xml" className="sr-only" onChange={xml} disabled={!!busy} data-note-xml />
           </label>
+          <button type="button" className="card flex flex-col items-center gap-2 p-6 text-center hover:border-copper" onClick={manual} disabled={!!busy} data-note-manual>
+            <Keyboard size={36} className="text-copper" />
+            <span className="font-display text-2xl">Digitar nota ou pedido</span>
+            <span className="text-sm text-muted">Sem foto e sem XML: informe fornecedor e itens à mão. O lançamento segue a mesma conferência e entra no estoque como compra recebida.</span>
+          </button>
         </div>
       )}
       {busy && <div className="flex items-center gap-2 text-muted"><Loader2 className="animate-spin" size={18} /> {busy}</div>}
@@ -517,7 +524,7 @@ function NoteImport({ stock, onDone }) {
                 const qtyStock = num(l.qty || 0) * (num(l.factor) || 1);
                 return (
                   <tr key={i} data-note-line={i}>
-                    <td className="max-w-[220px]"><div className="font-semibold">{l.description}</div><div className="text-xs text-muted">{l.note_unit}{l.match === 'aprendido' ? ' · reconhecido' : l.match === 'semelhante' ? ' · sugerido' : ''}</div></td>
+                    <td className="max-w-[220px]">{l.manual ? <input className="input py-1" placeholder="Descrição na nota (opcional)" value={l.description} onChange={(e) => setLine(i, { description: e.target.value })} aria-label="Descrição" /> : <div className="font-semibold">{l.description}</div>}<div className="text-xs text-muted">{l.note_unit}{l.match === 'aprendido' ? ' · reconhecido' : l.match === 'semelhante' ? ' · sugerido' : ''}</div></td>
                     <td><input className="input px-2" inputMode="decimal" value={l.qty} onChange={(e) => setLine(i, { qty: e.target.value })} aria-label="Quantidade" /></td>
                     <td><input className="input px-2" inputMode="decimal" value={l.factor} onChange={(e) => setLine(i, { factor: e.target.value })} aria-label="Unidades por embalagem" /></td>
                     <td>
@@ -535,6 +542,7 @@ function NoteImport({ stock, onDone }) {
               })}</tbody>
             </table>
           </div>
+          {doc.source === 'manual' && <button className="btn-ghost mt-2" onClick={() => setDoc({ ...doc, lines: [...doc.lines, blankLine()] })} data-note-add><Plus size={16} /> Adicionar item</button>}
           <div className="mt-3 flex flex-wrap items-center gap-3">
             <span className="font-display text-2xl">Total {money(total)}</span>
             {doc.total != null && Math.abs(Math.round(doc.total * 100) - total) > 1 && <span className="text-sm text-warn">A nota diz {money(Math.round(doc.total * 100))} — confira quantidades e preços (frete e descontos não entram).</span>}

@@ -1993,22 +1993,22 @@ tes:${e.ctx.companyId}`,60,3600);let n=await ja(e.ctx.companyId,t.image);a.json(
 let t=w(b.object({items:b.array(b.object({description:b.string().max(120),qty:b.number().nullable().optional(),unit:b.string().max(10).nullable().optional(),unit_price:b.number().nullable().
 optional(),total:b.number().nullable().optional()})).max(300)}),e.body);a.json({items:await yn(e.ctx.companyId,t.items)})}));R.post("/notes/confirm",p("compras.gerenciar"),l(async(e,a)=>{
 let t=w(b.object({supplier:b.string().trim().min(2).max(100),document:b.string().trim().max(60).optional().nullable(),due_date:b.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
-source:b.enum(["foto","xml"]),nfe_key:b.string().regex(/^\d{44}$/).optional().nullable(),receive:b.boolean().default(!0),lines:b.array(b.object({description:b.string().max(120),alias:b.
-string().max(120).optional(),stock_item_id:b.number().int().optional().nullable(),new_item:b.object({name:b.string().trim().min(2).max(80),unit:b.enum(["un","kg","g","L","ml"]),min_qty:b.
-number().min(0).max(1e6).default(0)}).optional().nullable(),qty:b.number().positive().max(1e6),factor:b.number().positive().max(1e4).default(1),unit_cost_cents:b.number().int().min(
-0).max(1e8)})).min(1).max(150)}),e.body),n=await v(async o=>{if(t.nfe_key){let d=(await o.query("select id from purchases where company_id = $1 and nfe_key = $2 and status <> 'canc\
-elada'",[e.ctx.companyId,t.nfe_key])).rows[0];if(d)throw g(`Esta NF-e j\xE1 foi lan\xE7ada (compra #${d.id})`,"nfe_duplicate")}let s=[];for(let d of t.lines){let u=d.stock_item_id;
-if(!u&&d.new_item&&(u=(await o.query("select id from stock_items where company_id = $1 and lower(name) = lower($2)",[e.ctx.companyId,d.new_item.name])).rows[0]?.id??(await o.query(
-"insert into stock_items (company_id, name, unit, min_qty, reorder_qty) values ($1,$2,$3,$4,$5) returning id",[e.ctx.companyId,d.new_item.name,d.new_item.unit,d.new_item.min_qty,d.
-new_item.min_qty*3])).rows[0].id),!u)throw f(`Escolha o insumo de "${d.description}" ou marque para criar`);if(!(await o.query("select 1 from stock_items where id = $1 and company_\
-id = $2",[u,e.ctx.companyId])).rows[0])throw f("Insumo inv\xE1lido");s.push({...d,stock_item_id:Number(u),stock_qty:Math.round(d.qty*d.factor*1e3)/1e3,stock_cost:Math.round(d.unit_cost_cents/
+source:b.enum(["foto","xml","manual"]),nfe_key:b.string().regex(/^\d{44}$/).optional().nullable(),receive:b.boolean().default(!0),lines:b.array(b.object({description:b.string().max(
+120),alias:b.string().max(120).optional(),stock_item_id:b.number().int().optional().nullable(),new_item:b.object({name:b.string().trim().min(2).max(80),unit:b.enum(["un","kg","g","\
+L","ml"]),min_qty:b.number().min(0).max(1e6).default(0)}).optional().nullable(),qty:b.number().positive().max(1e6),factor:b.number().positive().max(1e4).default(1),unit_cost_cents:b.
+number().int().min(0).max(1e8)})).min(1).max(150)}),e.body),n=await v(async o=>{if(t.nfe_key){let d=(await o.query("select id from purchases where company_id = $1 and nfe_key = $2 \
+and status <> 'cancelada'",[e.ctx.companyId,t.nfe_key])).rows[0];if(d)throw g(`Esta NF-e j\xE1 foi lan\xE7ada (compra #${d.id})`,"nfe_duplicate")}let s=[];for(let d of t.lines){let u=d.
+stock_item_id;if(!u&&d.new_item&&(u=(await o.query("select id from stock_items where company_id = $1 and lower(name) = lower($2)",[e.ctx.companyId,d.new_item.name])).rows[0]?.id??(await o.
+query("insert into stock_items (company_id, name, unit, min_qty, reorder_qty) values ($1,$2,$3,$4,$5) returning id",[e.ctx.companyId,d.new_item.name,d.new_item.unit,d.new_item.min_qty,
+d.new_item.min_qty*3])).rows[0].id),!u)throw f(`Escolha o insumo de "${d.description}" ou marque para criar`);if(!(await o.query("select 1 from stock_items where id = $1 and compan\
+y_id = $2",[u,e.ctx.companyId])).rows[0])throw f("Insumo inv\xE1lido");s.push({...d,stock_item_id:Number(u),stock_qty:Math.round(d.qty*d.factor*1e3)/1e3,stock_cost:Math.round(d.unit_cost_cents/
 d.factor)})}let i=t.lines.reduce((d,u)=>d+Math.round(u.qty*u.unit_cost_cents),0),r=(await o.query(`insert into purchases (company_id, supplier, document, due_date, total_cents, cre\
 ated_by, source, nfe_key, notes)
-      values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`,[e.ctx.companyId,t.supplier,t.document??null,t.due_date??null,i,e.ctx.userId,t.source,t.nfe_key??null,t.source==="foto"?"Lan\
-\xE7ada pela foto da nota (conferida)":"Importada do XML da NF-e"])).rows[0];for(let d of s){let u=(await o.query("insert into purchase_lines (company_id, purchase_id, stock_item_i\
-d, qty, unit_cost_cents) values ($1,$2,$3,$4,$5) returning id",[e.ctx.companyId,r.id,d.stock_item_id,d.stock_qty,d.stock_cost])).rows[0];t.receive&&(await o.query("update purchase_\
-lines set received_qty = qty where id = $1",[u.id]),await Xe(o,e.ctx,d.stock_item_id,d.stock_qty,d.stock_cost,{type:"purchase",id:r.id},`Compra ${r.id} \u2014 ${t.supplier}`));let m=_n(
-d.alias||d.description);m&&await o.query(`insert into stock_aliases (company_id, alias, stock_item_id, factor) values ($1,$2,$3,$4)
+      values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`,[e.ctx.companyId,t.supplier,t.document??null,t.due_date??null,i,e.ctx.userId,t.source,t.nfe_key??null,{foto:"Lan\xE7ada pela fo\
+to da nota (conferida)",xml:"Importada do XML da NF-e",manual:"Nota/pedido digitado manualmente"}[t.source]])).rows[0];for(let d of s){let u=(await o.query("insert into purchase_li\
+nes (company_id, purchase_id, stock_item_id, qty, unit_cost_cents) values ($1,$2,$3,$4,$5) returning id",[e.ctx.companyId,r.id,d.stock_item_id,d.stock_qty,d.stock_cost])).rows[0];t.
+receive&&(await o.query("update purchase_lines set received_qty = qty where id = $1",[u.id]),await Xe(o,e.ctx,d.stock_item_id,d.stock_qty,d.stock_cost,{type:"purchase",id:r.id},`Co\
+mpra ${r.id} \u2014 ${t.supplier}`));let m=_n(d.alias||d.description);m&&await o.query(`insert into stock_aliases (company_id, alias, stock_item_id, factor) values ($1,$2,$3,$4)
         on conflict (company_id, alias) do update set stock_item_id = excluded.stock_item_id, factor = excluded.factor, updated_at = now()`,[e.ctx.companyId,m,d.stock_item_id,d.factor])}
 return t.receive&&await o.query("update purchases set status = 'recebida' where id = $1",[r.id]),await h(o,e.ctx,"compra.nota_lancada",{entity:"purchase",entityId:r.id,data:{source:t.
 source,lines:s.length,total_cents:i,received:t.receive}}),{purchase_id:r.id,lines:s.length,total_cents:i,received:t.receive}}).catch(o=>{throw o.code==="23505"?g("Esta NF-e j\xE1 foi \

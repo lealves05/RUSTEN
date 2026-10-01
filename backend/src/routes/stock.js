@@ -333,7 +333,7 @@ router.post('/notes/match', need('compras.gerenciar'), h(async (req, res) => {
 router.post('/notes/confirm', need('compras.gerenciar'), h(async (req, res) => {
   const b = parse(z.object({
     supplier: z.string().trim().min(2).max(100), document: z.string().trim().max(60).optional().nullable(), due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
-    source: z.enum(['foto', 'xml']), nfe_key: z.string().regex(/^\d{44}$/).optional().nullable(), receive: z.boolean().default(true),
+    source: z.enum(['foto', 'xml', 'manual']), nfe_key: z.string().regex(/^\d{44}$/).optional().nullable(), receive: z.boolean().default(true),
     lines: z.array(z.object({
       description: z.string().max(120), alias: z.string().max(120).optional(),
       stock_item_id: z.number().int().optional().nullable(),
@@ -363,7 +363,7 @@ router.post('/notes/confirm', need('compras.gerenciar'), h(async (req, res) => {
     const total = b.lines.reduce((s, l) => s + Math.round(l.qty * l.unit_cost_cents), 0);
     const p = (await db.query(`insert into purchases (company_id, supplier, document, due_date, total_cents, created_by, source, nfe_key, notes)
       values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`, [req.ctx.companyId, b.supplier, b.document ?? null, b.due_date ?? null, total, req.ctx.userId, b.source, b.nfe_key ?? null,
-      b.source === 'foto' ? 'Lançada pela foto da nota (conferida)' : 'Importada do XML da NF-e'])).rows[0];
+      ({ foto: 'Lançada pela foto da nota (conferida)', xml: 'Importada do XML da NF-e', manual: 'Nota/pedido digitado manualmente' })[b.source]])).rows[0];
     for (const l of resolved) {
       const pl = (await db.query('insert into purchase_lines (company_id, purchase_id, stock_item_id, qty, unit_cost_cents) values ($1,$2,$3,$4,$5) returning id',
         [req.ctx.companyId, p.id, l.stock_item_id, l.stock_qty, l.stock_cost])).rows[0];

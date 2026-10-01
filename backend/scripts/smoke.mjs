@@ -767,6 +767,8 @@ await check('nota por foto: sem chave avisa; com leitura, confere, cria insumo, 
   assert.equal(x1.status, 201);
   assert.equal((await apiC('POST', '/api/stock/notes/confirm', { supplier: 'Fornecedor X', source: 'xml', nfe_key: key, lines: [{ description: 'a', stock_item_id: carne, qty: 1, unit_cost_cents: 100 }] })).data.code, 'nfe_duplicate');
   assert.equal((await apiC('GET', '/api/stock/notes/status')).data.own_key, true);
+  const man = await apiC('POST', '/api/stock/notes/confirm', { supplier: 'Mercado do bairro', source: 'manual', lines: [{ description: 'Carne', stock_item_id: carne, qty: 1, unit_cost_cents: 3000 }] });
+  assert.equal(man.status, 201, JSON.stringify(man.data));
   delete process.env.AI_API_URL; fake.close();
 });
 await check('módulos isolados por empresa', async () => {

@@ -470,14 +470,15 @@ const REASON_HELP = { contagem: 'A contagem física não bate com o sistema', qu
   erro_lancamento: 'Entrada ou venda lançada errada', consumo_interno: 'Consumo da equipe ou cortesia sem lançamento', furto_desvio: 'Suspeita de furto ou desvio (sempre vai para aprovação)',
   devolucao: 'Devolvido ao fornecedor sem nota de devolução', outro: 'Explique na justificativa' };
 
+const blankCorrection = (item) => ({ id: item?.id ? String(item.id) : '', counted: '', reason: 'contagem', just: '', evidence: '' });
 function CorrectionModal({ open, item, stock, onClose, onDone }) {
   const s = useSession();
   const toast = useToast();
-  const [f, setF] = useState({});
+  const [f, setF] = useState(() => blankCorrection(item));
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
-  useEffect(() => { if (open) { setF({ id: item?.id ? String(item.id) : '', counted: '', reason: 'contagem', just: '', evidence: '' }); setErr(null); setResult(null); } }, [open, item?.id]);
+  useEffect(() => { if (open) { setF(blankCorrection(item)); setErr(null); setResult(null); } }, [open, item?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!open) return null;
   const it = stock.find((x) => String(x.id) === f.id);
   const counted = f.counted === '' ? null : num(f.counted);
@@ -511,7 +512,7 @@ function CorrectionModal({ open, item, stock, onClose, onDone }) {
       footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" disabled={!ok || busy} onClick={send} data-corr-send>{busy ? 'Enviando…' : 'Registrar correção'}</button></>}>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Item do estoque" className="sm:col-span-2">
-          <select className="input" value={f.id} onChange={(e) => setF({ ...f, id: e.target.value })} disabled={!!item?.id}>
+          <select className="input" value={f.id} onChange={(e) => setF({ ...f, id: e.target.value })} disabled={!!item?.id} data-corr-item>
             <option value="">Escolha…</option>{stock.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
           </select>
         </Field>

@@ -7,7 +7,7 @@ import { ErrorBox, Loading, PageHeader, useLoad, useToast } from '../components/
 
 const iso = (d) => d.toISOString().slice(0, 10);
 const PRESETS = [['hoje', 'Hoje', 0], ['7d', '7 dias', 6], ['30d', '30 dias', 29], ['mes', 'Este mês', null]];
-const METHOD = { dinheiro: 'Dinheiro', pix: 'Pix', debito: 'Débito', credito: 'Crédito', vale: 'Vale/pontos', outro: 'Outro' };
+const METHOD = { dinheiro: 'Dinheiro', pix: 'Pix', debito: 'Débito', credito: 'Crédito', vale: 'Vale/pontos', outro: 'Outro', fiado: 'Fiado (a receber)', saldo_cliente: 'Crédito do cliente' };
 const CHANNEL = { comanda: 'Comanda', mesa: 'Mesa', balcao: 'Balcão', retirada: 'Retirada', delivery: 'Delivery' };
 const MODE = { manual: 'Manual', continua: 'Leitura contínua', dupla: 'Dupla leitura', excecao: 'Exceção autorizada', balcao: 'Balcão', delivery: 'Delivery' };
 const EVENTS = { 'consumo.reaberto': 'Reaberturas', 'consumo.cancelado': 'Consumos cancelados', 'pdv.itens_transferidos': 'Transferências de itens', 'pdv.mesa_trocada': 'Trocas de mesa',

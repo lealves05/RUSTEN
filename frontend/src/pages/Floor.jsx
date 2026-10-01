@@ -192,6 +192,7 @@ function Cards({ s }) {
                   {situation(c)}
                 </div>
                 <div className="mt-1 min-h-[1.5rem] truncate text-base font-semibold" title={c.customer_name || ''}>{c.customer_name || (c.session_id ? <span className="text-sm font-normal text-muted">sem nome</span> : '')}</div>
+                {c.session_id && <AccountChip cents={c.account_cents} />}
                 {c.session_id ? (
                   <a href={`/pdv?sessao=${c.session_id}`} className="text-xs text-muted hover:underline">{c.item_count} item(ns){c.items_cents > 0 ? ` · ${money(c.items_cents)}` : ''}{c.table_number ? ` · Mesa ${c.table_number}` : ''}{c.opened_at ? ` · desde ${time(c.opened_at, s.tz)}` : ''}</a>
                 ) : <span className="font-mono text-[10px] text-muted">{c.code}</span>}
@@ -207,7 +208,7 @@ function Cards({ s }) {
                 {shown.map((c) => (
                   <tr key={c.id}>
                     <td className="font-display text-xl">{c.number}</td>
-                    <td className="font-semibold">{c.customer_name || (c.session_id ? <span className="font-normal text-muted">sem nome</span> : '—')}</td>
+                    <td className="font-semibold">{c.customer_name || (c.session_id ? <span className="font-normal text-muted">sem nome</span> : '—')}{c.session_id && <span className="ml-2"><AccountChip cents={c.account_cents} /></span>}</td>
                     <td>{situation(c)}</td>
                     <td>{c.session_id ? <a className="underline" href={`/pdv?sessao=${c.session_id}`}>{c.item_count} item(ns){c.items_cents > 0 ? ` · ${money(c.items_cents)}` : ''}{c.table_number ? ` · Mesa ${c.table_number}` : ''}</a> : '—'}</td>
                     <td className="font-mono text-xs">{c.code}</td>
@@ -328,4 +329,11 @@ function ReplaceCard({ card, cards, onClose, onDone }) {
       <div className="mt-3"><ErrorBox error={err} /></div>
     </Modal>
   );
+}
+
+// Conta do cliente da comanda: fiado em aberto (vermelho) ou crédito (verde)
+function AccountChip({ cents }) {
+  const v = Number(cents || 0);
+  if (!v) return null;
+  return <span className={`chip ${v < 0 ? 'border-rust/40 bg-rust/10 text-rust' : 'border-ok/40 bg-ok/10 text-ok'}`} data-card-account title={v < 0 ? 'Cliente com fiado em aberto' : 'Cliente com crédito'}>{v < 0 ? `fiado ${money(-v)}` : `crédito ${money(v)}`}</span>;
 }

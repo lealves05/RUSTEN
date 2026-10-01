@@ -17,6 +17,7 @@ import { router as homeRouter } from './routes/home.js';
 import { router as customersRouter } from './routes/customers.js';
 import { router as kitchenRouter } from './routes/kitchen.js';
 import { router as stockRouter } from './routes/stock.js';
+import { router as accountRouter } from './routes/account.js';
 import { router as reportsRouter } from './routes/reports.js';
 import { router as deliveryRouter } from './routes/delivery.js';
 import { router as marketingRouter } from './routes/marketing.js';
@@ -57,6 +58,7 @@ export function createApp() {
   app.use('/api/pdv', ...gated, requireAccess('pdv'), pdvRouter);
   app.use('/api/cash', ...gated, requireAccess('pdv'), cashRouter);
   app.use('/api/customers', ...gated, requireAccess('clientes'), customersRouter);
+  app.use('/api/accounts', ...gated, requireAccess('clientes'), accountRouter);
   app.use('/api/kitchen', ...gated, requireAccess('cozinha'), kitchenRouter);
   app.use('/api/stock', ...gated, requireAccess('estoque'), stockRouter);
   app.use('/api/reports', ...gated, requireAccess('relatorios'), reportsRouter);

@@ -73,7 +73,9 @@ router.get('/cards', need('pdv.lancar'), h(async (req, res) => {
             (select code from scan_codes s where s.company_id = c.company_id and s.entity = 'COMANDA' and s.entity_id = c.id order by s.id limit 1) as code,
             s.id as session_id, s.customer_name, s.opened_at, s.status as session_status, t.number as table_number,
             (select count(*)::int from order_items i where i.session_id = s.id and i.status = 'ativo') as item_count,
-            (select coalesce(sum(i.total_cents),0)::bigint from order_items i where i.session_id = s.id and i.status = 'ativo') as items_cents
+            (select coalesce(sum(i.total_cents),0)::bigint from order_items i where i.session_id = s.id and i.status = 'ativo') as items_cents,
+            s.customer_id,
+            (select sum(a.amount_cents)::bigint from customer_account a where a.company_id = c.company_id and a.customer_id = s.customer_id) as account_cents
        from tab_cards c
        left join lateral (select * from consumption_sessions s where s.card_id = c.id and s.status in ('aberta','em_fechamento') order by s.id desc limit 1) s on true
        left join dining_tables t on t.id = s.table_id

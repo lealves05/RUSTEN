@@ -838,6 +838,62 @@ await check('bloqueio temporário após 8 senhas erradas', async () => {
   const r = await anon('POST', '/api/auth/login', { email: 'b@teste.dev', password: 'Motocustom2026x' });
   assert.equal(r.status, 423);
 });
+await check('conta do cliente: fiado com limite, crédito antecipado, caixa e estornos', async () => {
+  await apiC('POST', '/api/floor/cards', { from: 101, count: 3 });
+  const extra = (await apiC('GET', '/api/floor/cards')).data.cards.filter((c) => c.number > 100);
+  const open = async (i, withCustomer = true) => {
+    const s = await apiC('POST', '/api/pdv/sessions', { kind: 'comanda', card_id: extra[i - 10].id, ...(withCustomer ? { customer_id: custId } : {}) });
+    assert.equal(s.status, 201, `abrir comanda ${i}: ${JSON.stringify(s.data)}`);
+    await apiC('POST', '/api/pdv/items', { session_id: s.data.id, product_id: bIpa.id, qty: 2, launch_mode: 'manual', idempotency_key: key() });
+    return (await apiC('GET', `/api/pdv/sessions/${s.data.id}`)).data;
+  };
+  const pay = (sid, method, amount) => apiC('POST', `/api/pdv/sessions/${sid}/payments`, { method, amount_cents: amount, idempotency_key: key() });
+  // sem cliente na comanda não há fiado; "Outro" foi aposentado
+  const anon1 = await open(10, false);
+  assert.equal((await pay(anon1.id, 'fiado', 100)).data.code, 'customer_required');
+  assert.equal((await pay(anon1.id, 'outro', 100)).data.code, 'method_retired');
+  // limite de fiado: o operador sem permissão de gerente é barrado acima do limite
+  await apiC('PUT', `/api/accounts/customers/${custId}/limit`, { fiado_limit_cents: 1000 });
+  await apiC('POST', '/api/admin/users', { name: 'Caixa C', email: 'cx@teste.dev', password: 'Caixa2026xyzw', role_key: 'caixa' });
+  const cl = await anon('POST', '/api/auth/login', { email: 'cx@teste.dev', password: 'Caixa2026xyzw' });
+  const cx = client(cl.data.access_token, C.terminal);
+  const s1 = await open(11);
+  assert.ok(s1.account && s1.account.has_cpf);
+  const bal1 = s1.totals.balance;
+  assert.equal((await cx('POST', `/api/pdv/sessions/${s1.id}/payments`, { method: 'fiado', amount_cents: bal1, idempotency_key: key() })).data.code, 'fiado_limit');
+  // o proprietário (gerente) libera acima do limite, e fica registrado
+  const f = await pay(s1.id, 'fiado', bal1);
+  assert.equal(f.status, 201, JSON.stringify(f.data)); assert.equal(f.data.account.over_limit, true);
+  let acc = (await apiC('GET', `/api/accounts/customers/${custId}`)).data;
+  assert.equal(acc.debt_cents, bal1); assert.ok(acc.open_since);
+  // a comanda seguinte mostra o fiado em aberto
+  const s2 = await open(12);
+  assert.equal(s2.account.debt_cents, bal1);
+  // receber o fiado: não passa do devido; entra no caixa pela forma usada
+  const before = (await apiC('GET', '/api/cash/current')).data.expected.byMethod.dinheiro;
+  assert.equal((await apiC('POST', `/api/accounts/customers/${custId}/settle`, { amount_cents: bal1 + 1, method: 'dinheiro', idempotency_key: key() })).data.code, 'over_debt');
+  const st = await apiC('POST', `/api/accounts/customers/${custId}/settle`, { amount_cents: bal1, method: 'dinheiro', idempotency_key: key() });
+  assert.equal(st.status, 201, JSON.stringify(st.data)); assert.equal(st.data.balance_cents, 0);
+  const cur = (await apiC('GET', '/api/cash/current')).data.expected;
+  assert.equal(cur.byMethod.dinheiro, before + bal1); assert.equal(cur.info.fiado, bal1);
+  // crédito antecipado por Pix e uso no consumo
+  await apiC('POST', `/api/accounts/customers/${custId}/credit`, { amount_cents: 500, method: 'pix', idempotency_key: key() });
+  assert.equal((await pay(s2.id, 'saldo_cliente', 600)).data.code, 'insufficient_credit');
+  const u = await pay(s2.id, 'saldo_cliente', 500);
+  assert.equal(u.status, 201, JSON.stringify(u.data));
+  acc = (await apiC('GET', `/api/accounts/customers/${custId}`)).data;
+  assert.equal(acc.balance_cents, 0);
+  // estorno do pagamento da comanda devolve o crédito; lançamentos não mudam
+  await apiC('POST', `/api/pdv/payments/${u.data.payment.id}/refund`, { reason: 'cliente pagou em dinheiro' });
+  acc = (await apiC('GET', `/api/accounts/customers/${custId}`)).data;
+  assert.equal(acc.credit_cents, 500);
+  assert.ok(acc.entries.find((e) => e.kind === 'estorno'));
+  await assert.rejects(pool.query('update customer_account set amount_cents = 1 where company_id = $1', [C.me.company.id]));
+  const open1 = (await apiC('GET', '/api/accounts/open')).data;
+  assert.equal(open1.credit_cents, 500);
+  const ev = (await pool.query(`select action from audit_events where company_id = $1 and action in ('pagamento.fiado','cliente.fiado_recebido','cliente.credito_lancado','cliente.limite_fiado')`, [C.me.company.id])).rows.map((r) => r.action);
+  for (const a of ['pagamento.fiado', 'cliente.fiado_recebido', 'cliente.credito_lancado', 'cliente.limite_fiado']) assert.ok(ev.includes(a), a);
+});
 await check('remoção da demonstração preserva produtos já vendidos', async () => {
   const login = await anon('POST', '/api/auth/login', { email: 'a@teste.dev', password: 'Motocustom2026x' });
   const a2 = client(login.data.access_token, A.terminal);

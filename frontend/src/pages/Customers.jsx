@@ -1,11 +1,12 @@
 // Clientes: cadastro com CPF, histórico de consumo, fidelidade (extrato), importação com prévia e exportação.
 import { useEffect, useState } from 'react';
-import { Cake, Download, Gift, Plus, Search, Upload, Users } from 'lucide-react';
+import { Cake, Download, Gift, NotebookPen, Plus, Search, Upload, Users } from 'lucide-react';
 import { api, download } from '../lib/api.js';
 import { money, dateTime, dateBR } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
 import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHeader, Toggle, useLoad, useToast } from '../components/ui.jsx';
 import { cpfMask, cpfDigits, cpfValid } from '../components/CustomerPicker.jsx';
+import { AccountPanel, OpenAccountsModal } from '../components/Account.jsx';
 
 const KIND = { ganho: 'Ganho', resgate: 'Resgate', estorno: 'Estorno', expiracao: 'Vencidos', ajuste: 'Ajuste' };
 
@@ -32,6 +33,7 @@ export default function Customers() {
           {manage && s.can('dados.pessoais') && <button className="btn-ghost" onClick={() => setModal('import')}><Upload size={16} /> Importar</button>}
           {manage && <button className="btn-ghost" onClick={() => download('/api/customers/export/csv', 'clientes.csv').catch((e) => toast(e.message, 'bad'))}><Download size={16} /> Exportar</button>}
           {manage && s.can('configuracoes.gerenciar') && <button className="btn-ghost" onClick={() => setModal('loyalty')}><Gift size={16} /> Fidelidade</button>}
+          <button className="btn-ghost" onClick={() => setModal('accounts')} data-open-accounts><NotebookPen size={16} /> Fiado e créditos</button>
         </>} />
       {sum.data && (
         <div className="mb-4 grid grid-cols-2 gap-2 md:grid-cols-4">
@@ -73,6 +75,7 @@ export default function Customers() {
       )}
       <CustomerModal data={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); list.reload(); sum.reload(); toast('Cliente salvo'); }} />
       <CustomerView id={view} onClose={() => setView(null)} onEdit={(c) => { setView(null); setEdit(c); }} onChanged={() => { list.reload(); sum.reload(); }} />
+      <OpenAccountsModal open={modal === 'accounts'} onClose={() => setModal(null)} onPick={(cid) => { setModal(null); setView(cid); }} />
       <ImportModal open={modal === 'import'} onClose={() => setModal(null)} onDone={() => { list.reload(); sum.reload(); }} />
       <LoyaltyModal open={modal === 'loyalty'} cfg={sum.data?.loyalty} onClose={() => setModal(null)} onDone={() => { sum.reload(); toast('Fidelidade atualizada'); }} />
     </div>
@@ -162,6 +165,9 @@ function CustomerView({ id, onClose, onEdit, onChanged }) {
             {c.preferences && <div className="sm:col-span-2">Preferências: {c.preferences}</div>}
             <div className="sm:col-span-2">Contato: {c.unsubscribed ? 'descadastrado de campanhas' : [c.consent_whatsapp && 'WhatsApp', c.consent_email && 'e-mail'].filter(Boolean).join(' e ') || 'sem consentimento'}</div>
           </div>
+          <section><h3 className="font-display text-xl">Conta: crédito e fiado</h3>
+            <AccountPanel customerId={id} customerName={c.name} onChanged={onChanged} />
+          </section>
           <section><h3 className="font-display text-xl">Histórico de consumo</h3>
             {!d.data.history.length ? <p className="text-sm text-muted">Sem consumos identificados.</p> : (
               <table className="table-clean"><tbody>{d.data.history.map((h) => (

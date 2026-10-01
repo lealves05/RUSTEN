@@ -14,7 +14,11 @@ router.get('/dashboard', h(async (req, res) => {
     `select
        (select coalesce(sum(i.total_cents),0)::bigint from order_items i join consumption_sessions s on s.id = i.session_id
          where s.company_id = $1 and s.business_date = $2 and i.status = 'ativo' and s.status <> 'cancelada') as consumed_cents,
-       (select coalesce(sum(amount_cents),0)::bigint from payments where company_id = $1 and business_date = $2 and status = 'confirmado') as received_cents,
+       -- recebido de fato: fiado não é dinheiro e o uso de crédito já entrou quando o crédito foi lançado
+       ((select coalesce(sum(amount_cents),0)::bigint from payments where company_id = $1 and business_date = $2 and status = 'confirmado' and method not in ('fiado','saldo_cliente'))
+        + (select coalesce(sum(a.amount_cents),0)::bigint from customer_account a join cash_sessions cs on cs.id = a.cash_session_id
+            where a.company_id = $1 and cs.business_date = $2 and a.method is not null)) as received_cents,
+       (select coalesce(sum(amount_cents),0)::bigint from payments where company_id = $1 and business_date = $2 and status = 'confirmado' and method = 'fiado') as fiado_cents,
        (select count(*)::int from consumption_sessions where company_id = $1 and status in ('aberta','em_fechamento')) as open_sessions,
        (select count(*)::int from dining_tables where company_id = $1 and active and status in ('ocupada','conta')) as busy_tables,
        (select count(*)::int from dining_tables where company_id = $1 and active) as total_tables,
@@ -24,13 +28,13 @@ router.get('/dashboard', h(async (req, res) => {
        (select count(*)::int from products where company_id = $1 and demo) as demo_products`, [c.companyId, day])).rows[0];
   const byHour = money ? (await q(
     `select extract(hour from p.created_at at time zone $3)::int as hour, sum(p.amount_cents)::bigint as cents
-       from payments p where p.company_id = $1 and p.business_date = $2 and p.status = 'confirmado' group by 1 order by 1`,
+       from payments p where p.company_id = $1 and p.business_date = $2 and p.status = 'confirmado' and p.method not in ('fiado','saldo_cliente') group by 1 order by 1`,
     [c.companyId, day, c.company.timezone])).rows : null;
   const top = (await q(
     `select i.description, sum(i.qty)::numeric as qty ${money ? ', sum(i.total_cents)::bigint as cents' : ''}
        from order_items i join consumption_sessions s on s.id = i.session_id
       where s.company_id = $1 and s.business_date = $2 and i.status = 'ativo' group by 1 order by 2 desc limit 5`, [c.companyId, day])).rows;
-  if (!money) { delete r.consumed_cents; delete r.received_cents; delete r.cash_differences; }
+  if (!money) { delete r.consumed_cents; delete r.received_cents; delete r.fiado_cents; delete r.cash_differences; }
   res.json({ business_date: day, ...r, by_hour: byHour, top, access: c.access,
     pending_modules: ['delivery', 'estoque', 'cozinha', 'clientes', 'marketing', 'agente', 'fiscal', 'relatorios'] });
 }));

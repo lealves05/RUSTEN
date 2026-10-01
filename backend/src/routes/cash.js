@@ -6,6 +6,8 @@ import { need, audit, assertCan } from '../lib/auth.js';
 
 export const router = Router();
 const METHODS = ['dinheiro', 'pix', 'debito', 'credito', 'vale', 'outro'];
+// Não entram na conferência (não é dinheiro na gaveta nem na maquininha): fiado a receber e uso de crédito do cliente
+const NON_CASH = ['fiado', 'saldo_cliente'];
 
 async function expected(db, cashId) {
   const c = (await db.query('select opening_cents from cash_sessions where id = $1', [cashId])).rows[0];
@@ -13,12 +15,18 @@ async function expected(db, cashId) {
     `select method, coalesce(sum(amount_cents),0)::bigint as total from payments where cash_session_id = $1 and status = 'confirmado' group by method`, [cashId])).rows;
   const mov = (await db.query(
     `select kind, coalesce(sum(amount_cents),0)::bigint as total from cash_movements where cash_session_id = $1 group by kind`, [cashId])).rows;
+  // crédito lançado e fiado recebido (e seus estornos) entram no caixa pela forma usada
+  const acc = (await db.query(
+    `select method, coalesce(sum(amount_cents),0)::bigint as total from customer_account where cash_session_id = $1 and method is not null group by method`, [cashId])).rows;
   const byMethod = Object.fromEntries(METHODS.map((m) => [m, 0]));
-  for (const p of pays) byMethod[p.method] = Number(p.total);
+  const info = Object.fromEntries(NON_CASH.map((m) => [m, 0]));
+  for (const p of pays) { if (NON_CASH.includes(p.method)) info[p.method] = Number(p.total); else byMethod[p.method] = Number(p.total); }
+  const accountIn = {};
+  for (const a of acc) { byMethod[a.method] += Number(a.total); accountIn[a.method] = Number(a.total); }
   const m = Object.fromEntries(mov.map((r) => [r.kind, Number(r.total)]));
   // Dinheiro esperado na gaveta: abertura + vendas em dinheiro + suprimentos − sangrias − despesas (troco já descontado do valor aplicado)
   byMethod.dinheiro = c.opening_cents + byMethod.dinheiro + (m.suprimento || 0) - (m.sangria || 0) - (m.despesa || 0);
-  return { byMethod, opening: c.opening_cents, movements: m };
+  return { byMethod, opening: c.opening_cents, movements: m, info, account_in: accountIn };
 }
 
 async function currentCash(req) {

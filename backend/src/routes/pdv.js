@@ -7,6 +7,7 @@ import { pdvSettings, resolveCode, lockSession, assertOpen, assertUnitScope, ses
 import { consumeAuthorization } from './admin.js';
 import { consumeForItem, reverseForItem } from '../lib/stock.js';
 import { earnPoints, reverseEarn, reverseRedeemByPayment } from '../lib/customers.js';
+import { chargeAccount, reverseAccountByPayment, accountSummary } from '../lib/account.js';
 
 export const router = Router();
 
@@ -112,6 +113,7 @@ router.post('/sessions', h(async (req, res) => {
 async function loadSessionFull(db, ctx, id) {
   const s = (await db.query(
     `select s.*, c.number as card_number, t.number as table_number, u.name as opened_by_name, cu.points as customer_points,
+            cu.fiado_limit_cents as customer_fiado_limit, (cu.cpf is not null) as customer_has_cpf,
             (select count(*)::int from order_items i where i.session_id = s.id and i.status = 'ativo' and i.sent_at is null and i.kitchen_status = 'novo') as pending_send
        from consumption_sessions s left join tab_cards c on c.id = s.card_id left join dining_tables t on t.id = s.table_id
        left join users u on u.id = s.opened_by left join customers cu on cu.id = s.customer_id where s.id = $1 and s.company_id = $2`, [id, ctx.companyId])).rows[0];
@@ -124,7 +126,9 @@ async function loadSessionFull(db, ctx, id) {
   const payments = (await db.query(
     `select p.id, p.method, p.amount_cents, p.tendered_cents, p.change_cents, p.status, p.source, p.created_at, p.refund_reason, u.name as user_name
        from payments p left join users u on u.id = p.user_id where p.session_id = $1 order by p.id`, [id])).rows;
-  return { ...s, items, payments, totals: await sessionTotals(db, id) };
+  // conta do cliente (fiado em aberto / crédito) para o recebimento mostrar e oferecer
+  const account = s.customer_id ? { ...(await accountSummary(db, ctx.companyId, s.customer_id)), fiado_limit_cents: Number(s.customer_fiado_limit || 0), has_cpf: !!s.customer_has_cpf } : null;
+  return { ...s, items, payments, totals: await sessionTotals(db, id), account };
 }
 
 router.get('/sessions/:id', need('pdv.lancar'), h(async (req, res) => {
@@ -497,7 +501,7 @@ router.post('/sessions/:id/reopen', need('pdv.lancar'), h(async (req, res) => {
 }));
 
 // ---- Pagamentos ----
-async function openCashFor(db, ctx, unitId) {
+export async function openCashFor(db, ctx, unitId) {
   const params = [ctx.companyId];
   let where = "company_id = $1 and status = 'aberto'";
   if (ctx.terminalId) { params.push(ctx.terminalId); where += ` and terminal_id = $${params.length}`; }
@@ -506,7 +510,7 @@ async function openCashFor(db, ctx, unitId) {
 }
 
 const payInput = z.object({
-  method: z.enum(['dinheiro', 'pix', 'debito', 'credito', 'vale', 'outro']),
+  method: z.enum(['dinheiro', 'pix', 'debito', 'credito', 'vale', 'outro', 'fiado', 'saldo_cliente']),
   amount_cents: z.number().int().positive().max(100000000),
   tendered_cents: z.number().int().positive().max(100000000).optional(),
   idempotency_key: z.string().regex(/^[A-Za-z0-9_-]{8,80}$/),
@@ -527,6 +531,7 @@ router.post('/sessions/:id/payments', need('pdv.receber'), h(async (req, res) =>
     const t = await sessionTotals(db, s.id);
     if (b.amount_cents > t.balance) throw bad(`Valor maior que o saldo (${(t.balance / 100).toFixed(2)})`, 'over_balance');
     let change = 0;
+    if (b.method === 'outro') throw bad('A forma "Outro" foi substituída por "Fiado"', 'method_retired');
     if (b.tendered_cents != null) {
       if (b.method !== 'dinheiro') throw bad('Troco só é permitido em dinheiro', 'change_not_allowed');
       if (b.tendered_cents < b.amount_cents) throw bad('Valor entregue menor que o valor a pagar');
@@ -538,9 +543,12 @@ router.post('/sessions/:id/payments', need('pdv.receber'), h(async (req, res) =>
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning *`,
       [ctx.companyId, s.id, cash?.id ?? null, b.method, b.amount_cents, b.tendered_cents ?? null, change,
         businessDate(new Date(), timezone, day_cutoff), b.idempotency_key, ctx.userId])).rows[0];
+    // fiado vira débito do cliente; "saldo_cliente" usa o crédito antecipado (ambos exigem cliente com CPF na comanda)
+    const account = ['fiado', 'saldo_cliente'].includes(b.method) ? await chargeAccount(db, ctx, s, b.method, b.amount_cents, p.id) : null;
     await db.query('update consumption_sessions set version = version + 1 where id = $1', [s.id]);
-    await audit(db, ctx, 'pagamento.registrado', { entity: 'payment', entityId: p.id, unitId: s.unit_id, data: { session: s.id, method: b.method, amount_cents: b.amount_cents, change_cents: change } });
-    return { payment: p, totals: await sessionTotals(db, s.id) };
+    await audit(db, ctx, b.method === 'fiado' ? 'pagamento.fiado' : 'pagamento.registrado', { entity: 'payment', entityId: p.id, unitId: s.unit_id,
+      data: { session: s.id, method: b.method, amount_cents: b.amount_cents, change_cents: change, ...(account ? { cliente: account.customer_id, acima_do_limite: account.over_limit, saldo_conta: account.balance_after } : {}) } });
+    return { payment: p, totals: await sessionTotals(db, s.id), account };
   }).catch(async (e) => {
     if (e.code === '23505') {
       const again = await q('select * from payments where company_id = $1 and idempotency_key = $2', [ctx.companyId, b.idempotency_key]);
@@ -563,6 +571,7 @@ router.post('/payments/:id/refund', need('financeiro.estornar'), h(async (req, r
     if (!r.rows[0]) throw conflict('Pagamento já estornado');
     await db.query('update consumption_sessions set version = version + 1 where id = $1', [s.id]);
     await reverseRedeemByPayment(db, req.ctx, p.id);
+    await reverseAccountByPayment(db, req.ctx, p.id, b.reason);
     await audit(db, req.ctx, 'pagamento.estornado', { entity: 'payment', entityId: p.id, reason: b.reason, data: { amount_cents: p.amount_cents, method: p.method } });
     return { ok: true, totals: await sessionTotals(db, s.id) };
   }));

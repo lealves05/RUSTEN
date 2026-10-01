@@ -7,7 +7,10 @@ import { useSession } from '../lib/session.jsx';
 import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHeader, useLoad, useToast } from '../components/ui.jsx';
 
 const DENOMS = [20000, 10000, 5000, 2000, 1000, 500, 200, 100, 50, 25, 10, 5];
-const METHODS = [['dinheiro', 'Dinheiro'], ['pix', 'Pix'], ['debito', 'Débito'], ['credito', 'Crédito'], ['vale', 'Vale'], ['outro', 'Outro']];
+const ALL_METHODS = [['dinheiro', 'Dinheiro'], ['pix', 'Pix'], ['debito', 'Débito'], ['credito', 'Crédito'], ['vale', 'Vale'], ['outro', 'Outro']];
+// "Outro" foi substituído por "Fiado": só aparece se ainda houver valor antigo nesta forma
+const shownMethods = (exp) => ALL_METHODS.filter(([k]) => k !== 'outro' || Number(exp?.[k] || 0) !== 0);
+const METHODS = ALL_METHODS.filter(([k]) => k !== 'outro');
 
 export default function Cash() {
   const s = useSession();
@@ -34,7 +37,7 @@ export default function Cash() {
         <div className="card mb-4 p-4">
           <h2 className="font-display text-2xl">Caixa fechado</h2>
           <table className="table-clean mt-2"><thead><tr><th>Forma</th><th className="text-right">Esperado</th><th className="text-right">Contado</th><th className="text-right">Diferença</th></tr></thead>
-            <tbody>{METHODS.map(([k, l]) => <tr key={k}><td>{l}</td><td className="text-right">{money(result.expected[k])}</td><td className="text-right">{money(result.counted[k] || 0)}</td>
+            <tbody>{shownMethods(result.expected).map(([k, l]) => <tr key={k}><td>{l}</td><td className="text-right">{money(result.expected[k])}</td><td className="text-right">{money(result.counted[k] || 0)}</td>
               <td className={`text-right ${result.by_method[k] ? 'font-bold text-rust' : ''}`}>{money(result.by_method[k])}</td></tr>)}</tbody></table>
           <p className="mt-2 font-semibold">Diferença total: {money(result.difference_cents)}</p>
         </div>
@@ -63,8 +66,11 @@ export default function Cash() {
           {c.expected ? (
             <div className="card p-5">
               <h2 className="font-display text-2xl">Esperado agora</h2>
-              <table className="table-clean mt-2"><tbody>{METHODS.map(([k, l]) => <tr key={k}><td>{l}</td><td className="text-right">{money(c.expected.byMethod[k])}</td></tr>)}</tbody></table>
-              <p className="mt-2 text-xs text-muted">Dinheiro = troco inicial + recebimentos em dinheiro + suprimentos − sangrias − despesas.</p>
+              <table className="table-clean mt-2"><tbody>{shownMethods(c.expected.byMethod).map(([k, l]) => <tr key={k}><td>{l}</td><td className="text-right">{money(c.expected.byMethod[k])}</td></tr>)}
+                <tr data-cash-fiado><td>Fiado <span className="text-xs text-muted">(a receber, não entra na contagem)</span></td><td className="text-right text-warn">{money(c.expected.info?.fiado || 0)}</td></tr>
+                {!!c.expected.info?.saldo_cliente && <tr><td>Crédito de cliente usado <span className="text-xs text-muted">(já recebido antes)</span></td><td className="text-right text-muted">{money(c.expected.info.saldo_cliente)}</td></tr>}
+              </tbody></table>
+              <p className="mt-2 text-xs text-muted">Dinheiro = troco inicial + recebimentos em dinheiro + suprimentos − sangrias − despesas. Crédito lançado e fiado recebido entram na forma usada{Object.values(c.expected.account_in || {}).some(Boolean) ? ` (${money(Object.values(c.expected.account_in).reduce((a, b) => a + b, 0))} hoje)` : ''}.</p>
             </div>
           ) : <div className="card stripe p-5 text-sm"><b>Fechamento cego.</b> O valor esperado só aparece após a contagem.</div>}
         </div>
@@ -109,7 +115,7 @@ function MovementModal({ kind, cashId, onClose, onDone }) {
 
 function CloseModal({ open, cashId, onClose, onDone }) {
   const [notes, setNotes] = useState({});
-  const [counted, setCounted] = useState({ pix: '', debito: '', credito: '', vale: '', outro: '' });
+  const [counted, setCounted] = useState({ pix: '', debito: '', credito: '', vale: '' });
   const [just, setJust] = useState('');
   const [err, setErr] = useState(null);
   const cashTotal = DENOMS.reduce((sum, d) => sum + d * (Number(notes[d]) || 0), 0);

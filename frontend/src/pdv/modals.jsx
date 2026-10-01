@@ -1,10 +1,11 @@
 // Janelas do PDV: opções/peso, exceção autorizada, pagamento, cancelamento, transferência e pré-conta.
 import { useEffect, useMemo, useState } from 'react';
-import { Banknote, CreditCard, QrCode, Receipt, Ticket, Wallet } from 'lucide-react';
+import { Banknote, CreditCard, NotebookPen, PiggyBank, QrCode, Receipt, Ticket } from 'lucide-react';
 import { api, newKey } from '../lib/api.js';
 import { money, parseCents, centsToInput, qtyFmt, bp } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
 import { Badge, ErrorBox, Field, Modal } from '../components/ui.jsx';
+import { AccountBanner, AccountMoneyModal } from '../components/Account.jsx';
 
 // Autorização individual do gerente (e-mail + senha no terminal), uso único e validade curta
 export function ManagerAuth({ action, reason, onToken }) {
@@ -106,8 +107,10 @@ export function ExceptionModal({ open, product, destination, requiresManager, on
 
 const METHODS = [
   ['dinheiro', 'Dinheiro', Banknote], ['pix', 'Pix', QrCode], ['debito', 'Débito', CreditCard],
-  ['credito', 'Crédito', CreditCard], ['vale', 'Vale', Ticket], ['outro', 'Outro', Wallet],
+  ['credito', 'Crédito', CreditCard], ['vale', 'Vale', Ticket], ['fiado', 'Fiado', NotebookPen],
 ];
+// rótulos de pagamentos já registrados (inclui formas que não aparecem nos botões)
+const METHOD_LABEL = { dinheiro: 'Dinheiro', pix: 'Pix', debito: 'Débito', credito: 'Crédito', vale: 'Vale', fiado: 'Fiado', saldo_cliente: 'Crédito do cliente', outro: 'Outro' };
 
 export function PaymentModal({ open, session, onClose, onChanged }) {
   const s = useSession();
@@ -119,12 +122,19 @@ export function PaymentModal({ open, session, onClose, onChanged }) {
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState(null); // operação com resposta incerta
+  const [settle, setSettle] = useState(false);
   const t = session?.totals;
+  const acc = session?.account;
   useEffect(() => { if (open && t) { setAmount(centsToInput(Math.max(t.balance, 0))); setTendered(''); setErr(null); setSplit(null); } }, [open, t?.balance]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!session) return null;
   const amountC = parseCents(amount);
   const tenderedC = parseCents(tendered);
   const change = method === 'dinheiro' && tenderedC && amountC ? tenderedC - amountC : 0;
+  const methods = acc?.credit_cents > 0 ? [...METHODS, ['saldo_cliente', 'Crédito do cliente', PiggyBank]] : METHODS;
+  const noCustomer = !session.customer_id;
+  const fiadoAfter = acc ? acc.balance_cents - (amountC || 0) : null;
+  const fiadoOver = method === 'fiado' && acc && -fiadoAfter > acc.fiado_limit_cents;
+  const applyCredit = () => { setMethod('saldo_cliente'); setAmount(centsToInput(Math.min(acc.credit_cents, Math.max(t.balance, 0)))); };
 
   const pay = async (body = null) => {
     setBusy(true); setErr(null);
@@ -168,7 +178,7 @@ export function PaymentModal({ open, session, onClose, onChanged }) {
             <ul className="space-y-1 text-sm">
               {session.payments.map((p) => (
                 <li key={p.id} className="flex items-center justify-between gap-2">
-                  <span>{METHODS.find((m) => m[0] === p.method)?.[1]} {p.change_cents > 0 && <span className="text-xs text-muted">(troco {money(p.change_cents)})</span>}</span>
+                  <span>{METHOD_LABEL[p.method] || p.method} {p.change_cents > 0 && <span className="text-xs text-muted">(troco {money(p.change_cents)})</span>}</span>
                   <span className="flex items-center gap-2">
                     {p.status === 'estornado' ? <Badge tone="bad">Estornado</Badge> : <Badge tone="ok">{money(p.amount_cents)}</Badge>}
                     {p.status === 'confirmado' && s.can('financeiro.estornar') && <button className="text-xs underline" onClick={() => refund(p)}>estornar</button>}
@@ -184,11 +194,12 @@ export function PaymentModal({ open, session, onClose, onChanged }) {
           </div>
         </div>
         <div>
+          {acc && <div className="mb-3"><AccountBanner account={acc} name={session.customer_name} onSettle={s.can('pdv.receber') ? () => setSettle(true) : null} onApplyCredit={t.balance > 0 ? applyCredit : null} /></div>}
           {t.balance > 0 ? (
             <>
               <div className="grid grid-cols-3 gap-2">
-                {METHODS.map(([k, label, Icon]) => (
-                  <button key={k} aria-pressed={method === k} onClick={() => setMethod(k)}
+                {methods.map(([k, label, Icon]) => (
+                  <button key={k} aria-pressed={method === k} data-method={k} onClick={() => { setMethod(k); if (k === 'saldo_cliente') applyCredit(); }}
                     className={`flex min-h-[64px] flex-col items-center justify-center gap-1 rounded-lg border text-sm font-semibold ${method === k ? 'border-copper bg-copper/15 ring-2 ring-copper/40' : 'border-line hover:bg-raised'}`}>
                     <Icon size={20} />{label}
                   </button>
@@ -200,11 +211,20 @@ export function PaymentModal({ open, session, onClose, onChanged }) {
               )}
               {change > 0 && <div className="mt-2 font-display text-3xl text-ok">Troco {money(change)}</div>}
               {change < 0 && <div className="mt-2 text-sm text-rust">Valor entregue menor que o valor a pagar.</div>}
-              {method !== 'dinheiro' && <p className="mt-2 text-xs text-muted">Registro informado pelo operador. Cartão e Pix não geram troco.</p>}
+              {method === 'fiado' ? (
+                noCustomer || !acc?.has_cpf ? <p className="mt-2 rounded-lg bg-warn/10 p-2 text-sm text-warn">Para lançar fiado, identifique o cliente pelo CPF na comanda (Salão › comanda › cliente).</p> : (
+                  <div className={`mt-2 rounded-lg p-2 text-sm ${fiadoOver ? 'bg-rust/10 text-rust' : 'bg-raised'}`} data-fiado-info>
+                    Vai para a conta de <b>{session.customer_name}</b>. Fiado depois deste: <b>{money(Math.max(0, -fiadoAfter))}</b> · limite {money(acc.fiado_limit_cents)}.
+                    {fiadoOver && <div className="font-semibold">{s.can('pdv.autorizar') ? 'Acima do limite: será registrado como liberado por você (gerente).' : 'Acima do limite: peça a um gerente ou receba de outra forma.'}</div>}
+                  </div>
+                )
+              ) : method === 'saldo_cliente' ? <p className="mt-2 text-xs text-muted">Usa o crédito antecipado do cliente (disponível {money(acc?.credit_cents)}). Não entra dinheiro no caixa agora.</p>
+                : method !== 'dinheiro' && <p className="mt-2 text-xs text-muted">Registro informado pelo operador. Cartão e Pix não geram troco.</p>}
               {pending ? (
                 <button className="btn-primary btn-xl mt-3 w-full" disabled={busy} onClick={() => pay(pending)}>Resposta incerta — conferir e repetir sem duplicar</button>
               ) : (
-                <button className="btn-primary btn-xl mt-3 w-full" disabled={busy || !amountC || change < 0} onClick={() => pay()}>Registrar {amountC ? money(amountC) : ''}</button>
+                <button className="btn-primary btn-xl mt-3 w-full" disabled={busy || !amountC || change < 0 || (method === 'fiado' && (noCustomer || !acc?.has_cpf))} onClick={() => pay()} data-pay>
+                  {method === 'fiado' ? `Lançar ${amountC ? money(amountC) : ''} no fiado` : `Registrar ${amountC ? money(amountC) : ''}`}</button>
               )}
             </>
           ) : (
@@ -217,6 +237,8 @@ export function PaymentModal({ open, session, onClose, onChanged }) {
           <div className="mt-3"><ErrorBox error={err} /></div>
         </div>
       </div>
+      {acc && <AccountMoneyModal open={settle} mode="settle" customerId={session.customer_id} customerName={session.customer_name} debt={acc.debt_cents}
+        onClose={() => setSettle(false)} onDone={async () => { setSettle(false); await onChanged(); }} />}
     </Modal>
   );
 }

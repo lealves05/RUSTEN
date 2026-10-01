@@ -62,6 +62,10 @@ export const LESSONS = [
     desc: 'Foto da nota ou XML da NF-e: o sistema lê, você confere e tudo entra no estoque.', learn: ['Fotografar ou importar o XML', 'Conferir e converter embalagens', 'O sistema aprende cada fornecedor'] },
   { n: 22, file: '22-painel-da-tv', mod: 'cozinha', s: 102, title: 'Painel da TV: chamada dos pedidos', routes: ['/painel-tv'],
     desc: 'A fila em preparo e a chamada com fogos de artifício, som e voz quando o pedido fica pronto.', learn: ['Abrir o painel numa TV', 'Tudo pronto e Chamar na TV', 'Fogos, fundo, som e tipo de letra'] },
+  { n: 23, file: '23-correcao-de-estoque', mod: 'estoque', s: 73, title: 'Correção de estoque com auditoria', routes: ['/estoque'],
+    desc: 'Corrigir o saldo de um item com motivo, justificativa, limites e aprovação por outra pessoa.', learn: ['Informar o saldo real', 'Aplicação direta ou aprovação', 'Histórico e CSV para auditoria'] },
+  { n: 24, file: '24-fiado-e-credito', mod: 'clientes', s: 69, title: 'Fiado e crédito do cliente', routes: ['/clientes', '/salao'],
+    desc: 'Pendurar no fiado pelo CPF, receber o fiado, lançar crédito antecipado e ver tudo na comanda.', learn: ['Fiado com limite pelo CPF', 'Aviso de fiado ao receber', 'Crédito antecipado e extrato'] },
 ];
 
 export const videoUrl = (l) => `/treinamento/${l.file}.mp4`;

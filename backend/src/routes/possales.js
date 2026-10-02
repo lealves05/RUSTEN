@@ -255,6 +255,7 @@ async function itemsView(db, ctx, imp) {
   for (const r of rows) {
     const p = byId[Number(r.product_id)];
     r.product_name = p?.name || null;
+    r.untracked = p ? p.stock_mode === 'nenhum' : false;
     if (!p && r.status === 'pendente') r.suggestion = bestMatch(r.report_name, products);
     if (p) {
       const need = await requirements(db, ctx.companyId, p, r.qty, []);
@@ -270,7 +271,7 @@ async function itemsView(db, ctx, imp) {
   return { rows, products: products.map((p) => ({ id: p.id, name: p.name, stock_mode: p.stock_mode })),
     summary: { report_qty: reportQty, categories_qty: catQty, missing_qty: Math.max(0, catQty - reportQty) },
     can_post: imp.status === 'ativo' && imp.mode === 'externa', mode: imp.mode, status: imp.status,
-    can_edit: ctx.can('estoque.ajustar') };
+    can_edit: ctx.can('estoque.ajustar'), can_create: ctx.can('estoque.ajustar') && ctx.can('cardapio.gerenciar') };
 }
 
 router.get('/:id/items', need('financeiro.visualizar'), h(async (req, res) => {
@@ -322,8 +323,48 @@ router.put('/:id/items', need('financeiro.visualizar'), h(async (req, res) => {
 }));
 
 // lança a saída no estoque das linhas conferidas (ficha técnica ou produto acabado), uma única vez por linha
+// produto passa a ser controlado como produto acabado: item de estoque com o mesmo nome (reaproveita se já existir)
+async function controlAsFinished(db, ctx, p) {
+  let st = (await db.query('select id from stock_items where company_id = $1 and lower(name) = lower($2)', [ctx.companyId, p.name.slice(0, 80)])).rows[0];
+  if (!st) st = (await db.query("insert into stock_items (company_id, name, unit, avg_cost_cents) values ($1,$2,'un',$3) returning id", [ctx.companyId, p.name.slice(0, 80), Number(p.cost_cents) || 0])).rows[0];
+  await db.query("update products set stock_mode = 'acabado', stock_item_id = $3, updated_at = now() where id = $1 and company_id = $2", [p.id, ctx.companyId, st.id]);
+  await audit(db, ctx, 'estoque.produtos_controlados', { entity: 'product', entityId: p.id, data: { origem: 'maquininha', stock_item_id: st.id } });
+  return st.id;
+}
+
+// cadastra no cardápio os produtos da maquininha que não existem no RUSTEN (já com controle de estoque) e liga as linhas
+router.post('/:id/items/create-products', need('financeiro.visualizar'), h(async (req, res) => {
+  assertCan(req.ctx, 'estoque.ajustar'); assertCan(req.ctx, 'cardapio.gerenciar');
+  const b = parse(z.object({ rows: z.array(z.object({ id: z.number().int(), name: z.string().trim().min(1).max(120), price_cents: z.number().int().min(0).max(100000000).nullable().default(null) })).min(1).max(200) }), req.body);
+  const out = await tx(async (db) => {
+    const imp = await loadImport(db, req.ctx, req.params.id, true);
+    if (imp.status !== 'ativo') throw conflict('Importação cancelada');
+    let cat = (await db.query("select id from categories where company_id = $1 and name = 'Maquininha' and not demo", [req.ctx.companyId])).rows[0];
+    if (!cat) cat = (await db.query("insert into categories (company_id, name, sort) values ($1,'Maquininha',999) returning id", [req.ctx.companyId])).rows[0];
+    const created = [];
+    for (const r of b.rows) {
+      const row = (await db.query("select id, status from pos_sales_items where id = $1 and import_id = $2 for update", [r.id, imp.id])).rows[0];
+      if (!row || row.status !== 'pendente') throw bad('Linha inválida ou já lançada');
+      let p = (await db.query('select id, name, cost_cents, stock_mode from products where company_id = $1 and lower(name) = lower($2) and active', [req.ctx.companyId, r.name])).rows[0];
+      if (!p) {
+        p = (await db.query(`insert into products (company_id, name, description, kind, unit, price_cents, cost_cents, category_id, active, channels)
+            values ($1,$2,$3,'resale','un',$4,0,$5,true,'{pdv}') returning id, name, cost_cents, stock_mode`,
+        [req.ctx.companyId, r.name, 'Cadastrado pela importação da maquininha: confira preço, categoria e ficha técnica.', r.price_cents ?? 0, cat.id])).rows[0];
+        await db.query('insert into product_price_history (company_id, product_id, old_cents, new_cents, user_id) values ($1,$2,null,$3,$4)', [req.ctx.companyId, p.id, r.price_cents ?? 0, req.ctx.userId]);
+        await audit(db, req.ctx, 'produto.criado', { entity: 'product', entityId: p.id, data: { name: r.name, price_cents: r.price_cents ?? 0, origem: 'maquininha' } });
+        created.push(r.name);
+      }
+      if (p.stock_mode === 'nenhum') await controlAsFinished(db, req.ctx, p);
+      await db.query('update pos_sales_items set product_id = $2 where id = $1', [r.id, p.id]);
+    }
+    return { created, view: await itemsView(db, req.ctx, imp) };
+  });
+  res.status(201).json(out);
+}));
+
 router.post('/:id/items/post', need('financeiro.visualizar'), h(async (req, res) => {
   assertCan(req.ctx, 'estoque.ajustar');
+  const b = parse(z.object({ control_untracked: z.boolean().default(false) }), req.body || {});
   const out = await tx(async (db) => {
     const imp = await loadImport(db, req.ctx, req.params.id, true);
     if (imp.status !== 'ativo') throw conflict('Importação cancelada');
@@ -332,6 +373,14 @@ router.post('/:id/items/post', need('financeiro.visualizar'), h(async (req, res)
     const unmapped = rows.filter((r) => !r.product_id);
     if (unmapped.length) throw bad(`Escolha o produto (ou marque "ignorar") para: ${unmapped.slice(0, 5).map((r) => r.report_name).join(', ')}`, 'unmapped');
     if (!rows.length) throw bad('Nada pendente para lançar');
+    // produtos ainda sem controle de estoque: passam a ser controlados como produto acabado (item de estoque com o mesmo nome)
+    let controlled = [];
+    if (b.control_untracked) {
+      const un = (await db.query("select id, name, cost_cents from products where company_id = $1 and id = any($2) and stock_mode = 'nenhum' for update",
+        [req.ctx.companyId, [...new Set(rows.map((r) => Number(r.product_id)))]])).rows;
+      for (const p of un) await controlAsFinished(db, req.ctx, p);
+      controlled = un.map((p) => p.name);
+    }
     const co = (await db.query('select settings from companies where id = $1', [req.ctx.companyId])).rows[0];
     const cfg = stockConfig(co.settings);
     const per = `${String(imp.period_from).split('-').reverse().join('/')} a ${String(imp.period_to).split('-').reverse().join('/')}`;
@@ -366,8 +415,8 @@ router.post('/:id/items/post', need('financeiro.visualizar'), h(async (req, res)
       }
     }
     await audit(db, req.ctx, 'maquininha.estoque_baixado', { entity: 'pos_sales_import', entityId: imp.id,
-      data: { rows: rows.length, movements: moves, items: plan.map(({ r, p }) => ({ report: r.report_name, product: p.name, qty: Number(r.qty) })) } });
-    return { posted: rows.length, movements: moves, without_stock: plan.filter((x) => !x.need.size).map((x) => x.p.name), view: await itemsView(db, req.ctx, imp) };
+      data: { rows: rows.length, movements: moves, controlled, items: plan.map(({ r, p }) => ({ report: r.report_name, product: p.name, qty: Number(r.qty) })) } });
+    return { posted: rows.length, movements: moves, controlled, without_stock: plan.filter((x) => !x.need.size).map((x) => x.p.name), view: await itemsView(db, req.ctx, imp) };
   });
   res.json(out);
 }));

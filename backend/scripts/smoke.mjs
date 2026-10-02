@@ -1047,13 +1047,30 @@ await check('vendas da maquininha: produtos do relatório viram saída de estoqu
   const v2 = (await apiC('GET', `/api/pos-sales/${imp2.data.id}/items`)).data;
   assert.equal(v2.rows.find((r) => r.report_name.startsWith('HAMB')).product_id, bBurger.id);
   assert.equal(v2.rows.find((r) => r.report_name === 'PILSEN').product_id, pilsProd.id);
+  // produto que não existe no cardápio: cadastra direto (já com estoque) e lança; produto sem controle passa a ser controlado
+  const unk = v2.rows.find((r) => r.report_name.startsWith('Coisa'));
+  const cr = await apiC('POST', `/api/pos-sales/${imp2.data.id}/items/create-products`, { rows: [{ id: unk.id, name: 'Coisa nova da maquininha', price_cents: 990 }] });
+  assert.equal(cr.status, 201, JSON.stringify(cr.data)); assert.deepEqual(cr.data.created, ['Coisa nova da maquininha']);
+  const newProd = (await apiC('GET', '/api/menu/products')).data.find((x) => x.name === 'Coisa nova da maquininha');
+  assert.equal(newProd.price_cents, 990);
+  const plain = bProducts.find((x) => !x.name.startsWith('Pilsen') && x.id !== bBurger.id && x.stock_mode !== 'ficha' && x.stock_mode !== 'acabado');
+  await pool.query("update products set stock_mode = 'nenhum', stock_item_id = null where id = $1", [plain.id]);
+  const v3 = (await apiC('GET', `/api/pos-sales/${imp2.data.id}/items`)).data;
+  const rows3 = v3.rows.map((r) => ({ id: r.id, qty: r.qty, product_id: r.report_name === 'PILSEN' ? plain.id : r.product_id, ignored: false }));
+  assert.equal((await apiC('PUT', `/api/pos-sales/${imp2.data.id}/items`, { rows: rows3 })).data.rows.find((r) => r.report_name === 'PILSEN').untracked, true);
+  const post2 = await apiC('POST', `/api/pos-sales/${imp2.data.id}/items/post`, { control_untracked: true });
+  assert.equal(post2.status, 200, JSON.stringify(post2.data)); assert.deepEqual(post2.data.controlled, [plain.name]);
+  const items2 = (await apiC('GET', '/api/stock/items')).data;
+  assert.equal(items2.find((x) => x.name === 'Coisa nova da maquininha').balance, -1);
+  assert.equal(items2.find((x) => x.name.toLowerCase() === plain.name.toLowerCase()).balance, -2);
   // DRE com o custo dos insumos da maquininha
   const dre = (await apiC('GET', '/api/reports/overview?from=2026-08-01&to=2026-08-31')).data;
   assert.ok(dre.external.cmv_cents > 0); assert.equal(dre.dre.maquininha_cmv, dre.external.cmv_cents);
   // cancelar a importação estorna o estoque
+  const bc = await bal();
   assert.equal((await apiC('POST', `/api/pos-sales/${imp.data.id}/cancel`, { reason: 'teste de estorno' })).status, 200);
   const b2 = await bal();
-  assert.equal(Math.round(b2[carne] * 1000), Math.round(b0[carne] * 1000));
+  assert.equal(Math.round((b2[carne] - bc[carne]) * 1000), 800); // devolve os 0,8 kg da primeira importação
   assert.ok((await apiC('GET', `/api/pos-sales/${imp.data.id}/items`)).data.rows.filter((r) => r.moved).every((r) => r.status === 'estornado'));
   // importação "já lançadas nas comandas" não baixa de novo
   const imp3 = await apiC('POST', '/api/pos-sales', { file_name: 'e3.pdf', file_b64: pdf('3'), mode: 'conferencia', report: rep('2026-06-01', '2026-06-30', '2026-06-10') });

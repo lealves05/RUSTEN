@@ -100,16 +100,24 @@ function ImportFlow({ onClose, onDone }) {
     try {
       const r = await api('/api/pos-sales', { method: 'POST', body: { file_name: st.file.name, file_b64: st.b64, mode, replace, report: st.report } });
       toast(r.replaced.length ? 'Relatório importado (o anterior foi substituído)' : 'Vendas da maquininha registradas');
-      onDone(r.id);
+      if (mode === 'externa') setSt({ step: 'estoque', id: r.id, file: st.file }); else onDone(r.id);
     } catch (e) { toast(e.message, 'bad'); } finally { setBusy(false); }
   };
   const r = st.report; const pv = st.pv;
   const blocked = pv && (pv.problems.length || pv.duplicate || (pv.overlaps.length && !replace));
   return (
     <Modal open wide onClose={onClose} title="Importar relatório de vendas da InfinitePay"
-      footer={st.step === 'conferir' && <><button className="btn-ghost" onClick={() => setSt({ step: 'arquivo' })}>Escolher outro arquivo</button>
-        <button className="btn-primary" disabled={busy || !!blocked} onClick={save} data-pos-confirm>{busy ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />} Registrar no sistema</button></>}>
-      {st.step !== 'conferir' && (
+      footer={st.step === 'conferir' ? <><button className="btn-ghost" onClick={() => setSt({ step: 'arquivo' })}>Escolher outro arquivo</button>
+        <button className="btn-primary" disabled={busy || !!blocked} onClick={save} data-pos-confirm>{busy ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />} Registrar e ir para os produtos</button></>
+        : st.step === 'estoque' ? <button className="btn-primary" onClick={() => onDone(st.id)} data-pos-finish>Concluir</button> : null}>
+      {st.step === 'estoque' && (
+        <div className="space-y-3" data-pos-step2>
+          <Steps n={2} />
+          <p className="text-sm text-muted">Vendas registradas. Agora ligue cada produto vendido na maquininha a um produto do seu cardápio (ou cadastre os que não existem) e lance a saída no estoque. Você pode fazer isso depois, em <b>Detalhes</b> da importação.</p>
+          <StockOut id={st.id} />
+        </div>
+      )}
+      {(st.step === 'arquivo' || st.step === 'lendo') && (
         <div className="space-y-3">
           <ol className="list-decimal space-y-1 pl-5 text-sm text-muted">
             <li>No app ou portal da InfinitePay, abra <b>Relatórios › Vendas</b> e escolha o período.</li>
@@ -126,6 +134,7 @@ function ImportFlow({ onClose, onDone }) {
       )}
       {st.step === 'conferir' && (
         <div className="space-y-4" data-pos-preview>
+          <Steps n={1} />
           <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
             <Box l="Período" v={`${dateBR(r.period_from)} a ${dateBR(r.period_to)}`} small />
             <Box l="Receita bruta" v={money(r.gross_cents)} />
@@ -145,8 +154,9 @@ function ImportFlow({ onClose, onDone }) {
             <section className="min-w-0"><h3 className="mb-1 font-display text-xl">Por dia</h3><DaysTable rows={pv.reconciliation} /></section>
             <section className="min-w-0"><h3 className="mb-1 font-display text-xl">Por forma</h3>
               <table className="table-clean"><tbody>{r.methods.map((m) => <tr key={m.label}><td>{m.label}{/money/i.test(m.label) ? ' (dinheiro)' : ''}</td><td className="text-right">{money(m.gross_cents)}</td></tr>)}</tbody></table>
-              {r.products.length > 0 && <><h3 className="mb-1 mt-3 font-display text-xl">Mais vendidos</h3>
-                <p className="text-xs text-muted">{r.products.slice(0, 6).map((p) => `${p.name} (${p.qty})`).join(' · ')}</p></>}
+{r.products.length > 0 && <><h3 className="mb-1 mt-3 font-display text-xl">Produtos identificados</h3>
+                <p className="text-xs text-muted">{r.products.map((p) => `${p.name} (${p.qty})`).join(' · ')}</p>
+                <p className="mt-1 text-xs text-copper">No passo 2 você liga estes produtos ao cardápio e lança a saída no estoque.</p></>}
             </section>
           </div>
           <Field label="Como registrar estas vendas?">
@@ -164,6 +174,12 @@ function ImportFlow({ onClose, onDone }) {
   );
 }
 
+const Steps = ({ n }) => (
+  <ol className="flex flex-wrap gap-2 text-xs font-semibold uppercase tracking-wide">
+    {['Conferir as vendas', 'Produtos → saída no estoque'].map((t, i) => (
+      <li key={t} className={`rounded-full border px-3 py-1 ${i + 1 === n ? 'border-copper text-copper' : i + 1 < n ? 'border-ok text-ok' : 'border-line text-muted'}`}>{i + 1}. {t}</li>))}
+  </ol>
+);
 const Box = ({ l, v, small }) => <div className="card p-3"><div className="text-xs uppercase text-muted">{l}</div><div className={small ? 'font-semibold' : 'font-display text-2xl'}>{v}</div></div>;
 const Alert = ({ tone, children }) => (
   <div className={`flex gap-2 rounded-lg border p-3 text-sm ${tone === 'bad' ? 'border-rust text-rust' : 'border-warn'}`}><AlertTriangle size={18} className="shrink-0" /><div>{children}</div></div>
@@ -258,6 +274,8 @@ function StockOut({ id }) {
   const [rows, setRows] = useState([]);
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [control, setControl] = useState(true);
+  const [creating, setCreating] = useState(null);
   useEffect(() => {
     if (!d.data) return;
     // sugestão pelo nome já vem marcada (confira antes de lançar)
@@ -281,13 +299,25 @@ function StockOut({ id }) {
     setBusy(true);
     try {
       await api(`/api/pos-sales/${id}/items`, { method: 'PUT', body: payload() });
-      const r = await api(`/api/pos-sales/${id}/items/post`, { method: 'POST' });
-      toast(`Saída lançada no estoque: ${r.posted} produto(s)${r.without_stock.length ? ` — sem controle de estoque: ${r.without_stock.join(', ')}` : ''}`);
+      const r = await api(`/api/pos-sales/${id}/items/post`, { method: 'POST', body: { control_untracked: control } });
+      toast(`Saída lançada no estoque: ${r.posted} produto(s)${r.controlled.length ? ` — passaram a ter controle de estoque: ${r.controlled.join(', ')}` : ''}${r.without_stock.length ? ` — sem controle de estoque: ${r.without_stock.join(', ')}` : ''}`);
       setDirty(false); d.reload();
     } catch (e) { toast(e.message, 'bad'); } finally { setBusy(false); }
   };
   const pending = rows.filter((r) => open(r) && !r.ignored);
   const product = (pid) => v.products.find((p) => Number(p.id) === Number(pid));
+  const missing = rows.filter((r) => r.id && open(r) && !r.ignored && !r.product_id);
+  const untracked = pending.filter((r) => r.product_id && product(r.product_id)?.stock_mode === 'nenhum');
+  const createProducts = async () => {
+    setBusy(true);
+    try {
+      await api(`/api/pos-sales/${id}/items`, { method: 'PUT', body: payload() });
+      const sel = creating.filter((c) => c.on);
+      const out = await api(`/api/pos-sales/${id}/items/create-products`, { method: 'POST', body: { rows: sel.map((c) => ({ id: c.id, name: c.name.trim(), price_cents: c.price ? Math.round(Number(String(c.price).replace(/\./g, '').replace(',', '.')) * 100) : null })) } });
+      toast(out.created.length ? `Cadastrados no cardápio (categoria Maquininha): ${out.created.join(', ')}` : 'Produtos ligados');
+      setCreating(null); setDirty(false); d.reload();
+    } catch (e) { toast(e.message, 'bad'); } finally { setBusy(false); }
+  };
   // prévia calculada no servidor para o produto salvo (a quantidade é ajustada na hora)
   const srvRow = (r) => (r.id ? v.rows.find((o) => o.id === r.id) : null);
   const srvStock = (r) => { const o = srvRow(r); return o && Number(o.product_id) === Number(r.product_id) && o.stock?.length ? o.stock : null; };
@@ -324,7 +354,7 @@ function StockOut({ id }) {
                 <td className="text-xs">
                   {r.moved?.length ? r.moved.map((m) => `${qtyBR(m.qty)} ${m.unit} ${m.name}`).join(' · ')
                     : srvStock(r) ? srvStock(r).map((m) => `${qtyBR(m.qty * (Number(r.qty) / Number(srvRow(r).qty)))} ${m.unit} ${m.name}`).join(' · ')
-                      : p && p.stock_mode === 'nenhum' ? <span className="text-muted">produto sem controle de estoque</span>
+                      : p && p.stock_mode === 'nenhum' ? <span className="text-warn">sem controle de estoque{control ? ' — será criado ao lançar' : ''}</span>
                         : p ? <span className="text-muted">{dirty ? 'salve para ver' : '—'}</span> : <span className="text-muted">—</span>}
                 </td>
                 <td>{r.ignored && open(r) ? <Badge tone="muted">ignorado</Badge> : <Badge tone={STATUS[r.status || 'pendente'][0]}>{STATUS[r.status || 'pendente'][1]}</Badge>}</td>
@@ -335,6 +365,30 @@ function StockOut({ id }) {
             );
           })}</tbody>
         </table></div>
+      )}
+      {editable && missing.length > 0 && v.can_create && !creating && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-warn p-3 text-sm">
+          <span>{missing.length} produto(s) da maquininha não estão no seu cardápio.</span>
+          <button className="btn-primary ml-auto py-1.5" onClick={() => setCreating(missing.map((r) => ({ id: r.id, name: r.report_name, price: '', on: true })))} data-pos-create-open>Cadastrar no cardápio</button>
+        </div>
+      )}
+      {creating && (
+        <div className="card space-y-2 border-copper p-3" data-pos-create>
+          <p className="text-sm">Os produtos são criados na categoria <b>Maquininha</b>, já com controle de estoque (item de estoque com o mesmo nome, em unidades). O preço é opcional; confira depois no Cardápio. Para chope e drinks, ajuste a ficha técnica no Estoque.</p>
+          <table className="table-clean"><thead><tr><th /><th>Nome no cardápio</th><th className="w-40">Preço de venda (R$)</th></tr></thead>
+            <tbody>{creating.map((c, i) => (
+              <tr key={c.id}><td><input type="checkbox" checked={c.on} onChange={(e) => setCreating((cs) => cs.map((x, j) => (j === i ? { ...x, on: e.target.checked } : x)))} /></td>
+                <td><input className="input py-1" value={c.name} maxLength={120} onChange={(e) => setCreating((cs) => cs.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} data-pos-create-name /></td>
+                <td><input className="input py-1 text-right" inputMode="decimal" placeholder="opcional" value={c.price} onChange={(e) => setCreating((cs) => cs.map((x, j) => (j === i ? { ...x, price: e.target.value } : x)))} data-pos-create-price /></td></tr>))}</tbody></table>
+          <div className="flex gap-2"><button className="btn-ghost" onClick={() => setCreating(null)}>Voltar</button>
+            <button className="btn-primary" disabled={busy || !creating.some((c) => c.on && c.name.trim())} onClick={createProducts} data-pos-create-confirm>Cadastrar {creating.filter((c) => c.on).length} produto(s)</button></div>
+        </div>
+      )}
+      {editable && untracked.length > 0 && (
+        <label className="flex items-start gap-2 rounded-lg border border-line p-3 text-sm" data-pos-control>
+          <input type="checkbox" className="mt-1" checked={control} onChange={(e) => setControl(e.target.checked)} />
+          <span><b>Controlar o estoque de {untracked.length} produto(s) que ainda não têm controle</b> ({[...new Set(untracked.map((r) => product(r.product_id)?.name))].join(', ')}): cria o item de estoque com o mesmo nome, em unidades. Sem isso, essas linhas são registradas mas nada sai do estoque.</span>
+        </label>
       )}
       {editable && (
         <div className="flex flex-wrap gap-2">

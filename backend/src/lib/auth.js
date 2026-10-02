@@ -27,7 +27,8 @@ export const deriveKey = (purpose) =>
   Buffer.from(crypto.hkdfSync('sha256', rootSecret, 'rusten', purpose, 32));
 const accessKey = deriveKey('access-token');
 
-export const ACCESS_TTL_S = 12 * 3600;
+// F05 (mitigação): token de acesso curto; a renovação é automática e única entre abas
+export const ACCESS_TTL_S = Number(env.ACCESS_TTL_S) || 15 * 60;
 export const REFRESH_TTL_DAYS = 30;
 
 export function signAccess(user, sessionId) {

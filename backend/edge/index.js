@@ -1145,9 +1145,9 @@ test(s)||Math.abs(Date.now()/1e3-i)>qo)throw o();let r=ea(n.secret,i,e.method,e.
 created_at < now() - interval '1 day'"),t()}catch(n){t(n)}}var na=et;var ra=O.NODE_ENV==="production",St=O.JWT_SECRET||O.SUPABASE_SERVICE_ROLE_KEY||(ra?null:"dev-only-rusten-secret-not-for-production");if(!St)throw new Error("JWT_SECRET \xE9 obrigat\xF3ri\
 o em produ\xE7\xE3o");function aa(e){return e?["changeme","secret","jwt_secret","dev-only-rusten-secret-not-for-production"].includes(e)?"valor de exemplo":ia.byteLength(e,"utf8")<
 32?"curta (m\xEDnimo de 32 bytes aleat\xF3rios)":new Set(e).size<10?"pouca varia\xE7\xE3o de caracteres":null:"ausente"}if(ra&&aa(St))throw new Error(`JWT_SECRET inseguro (${aa(St)}\
-) \u2014 o servidor n\xE3o inicia em produ\xE7\xE3o.`);var pt=e=>ia.from(Ao.hkdfSync("sha256",St,"rusten",e,32)),ca=pt("access-token"),Oo=12*3600,da=30;function un(e,a){return sa.sign(
-{sub:String(e.id),cid:String(e.company_id),sid:a},ca,{expiresIn:Oo,algorithm:"HS256"})}async function ma(e,a){let{rows:t}=await c(`select u.id, u.company_id, u.unit_id, u.name, u.e\
-mail, u.role_key, u.active, u.password_changed_at,
+) \u2014 o servidor n\xE3o inicia em produ\xE7\xE3o.`);var pt=e=>ia.from(Ao.hkdfSync("sha256",St,"rusten",e,32)),ca=pt("access-token"),Oo=Number(O.ACCESS_TTL_S)||900,da=30;function un(e,a){
+return sa.sign({sub:String(e.id),cid:String(e.company_id),sid:a},ca,{expiresIn:Oo,algorithm:"HS256"})}async function ma(e,a){let{rows:t}=await c(`select u.id, u.company_id, u.unit_\
+id, u.name, u.email, u.role_key, u.active, u.password_changed_at,
             r.name as role_name, r.level, r.permissions,
             c.name as company_name, c.segment, c.timezone, c.settings, c.access, c.access_updated_at, c.is_demo
        from users u join roles r on r.company_id = u.company_id and r.key = u.role_key

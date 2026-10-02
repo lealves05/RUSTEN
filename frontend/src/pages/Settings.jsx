@@ -1,7 +1,7 @@
 // Configurações: empresa/aparência, PDV (leitura e lançamento), usuários, perfis, unidades/terminais, assinatura e auditoria.
 import { useEffect, useState } from 'react';
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom';
-import { api, terminal } from '../lib/api.js';
+import { api, terminal, download } from '../lib/api.js';
 import { dateTime, bp } from '../lib/format.js';
 import { useSession, applyTheme } from '../lib/session.jsx';
 import Subscription from './Subscription.jsx';
@@ -305,14 +305,12 @@ function Units() {
 }
 
 function Audit() {
+  const toast = useToast();
   const s = useSession();
   const [action, setAction] = useState('');
   const [page, setPage] = useState(0);
   const { data, loading, error, reload } = useLoad(() => api(`/api/admin/audit?limit=50&offset=${page * 50}${action ? `&action=${encodeURIComponent(action)}` : ''}`), [action, page]);
-  const csv = async () => {
-    const r = await fetch(`${import.meta.env.VITE_API_URL || ''}/api/admin/audit?format=csv&limit=500`, { headers: { authorization: `Bearer ${localStorage.getItem('rusten.access')}` } });
-    const url = URL.createObjectURL(await r.blob()); const a = document.createElement('a'); a.href = url; a.download = 'auditoria.csv'; a.click(); URL.revokeObjectURL(url);
-  };
+  const csv = () => download('/api/admin/audit?format=csv&limit=500', 'auditoria.csv').catch((e) => toast(e.message, 'bad'));
   return (
     <div>
       <div className="mb-3 flex flex-wrap gap-2">

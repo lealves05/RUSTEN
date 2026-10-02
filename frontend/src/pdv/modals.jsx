@@ -1,11 +1,12 @@
 // Janelas do PDV: opções/peso, exceção autorizada, pagamento, cancelamento, transferência e pré-conta.
 import { useEffect, useMemo, useState } from 'react';
-import { Banknote, CreditCard, NotebookPen, PiggyBank, QrCode, Receipt, Ticket } from 'lucide-react';
+import { Banknote, CreditCard, NotebookPen, PiggyBank, QrCode, Receipt, Ticket, Zap } from 'lucide-react';
 import { api, newKey } from '../lib/api.js';
 import { money, parseCents, centsToInput, qtyFmt, bp } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
 import { Badge, ErrorBox, Field, Modal } from '../components/ui.jsx';
 import { AccountBanner, AccountMoneyModal } from '../components/Account.jsx';
+import { InfinitePayCharge } from '../components/InfinitePay.jsx';
 
 // Autorização individual do gerente (e-mail + senha no terminal), uso único e validade curta
 export function ManagerAuth({ action, reason, onToken }) {
@@ -123,6 +124,8 @@ export function PaymentModal({ open, session, onClose, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState(null); // operação com resposta incerta
   const [settle, setSettle] = useState(false);
+  const [ip, setIp] = useState(null);
+  useEffect(() => { if (open && s.can('pdv.receber')) api('/api/infinitepay/settings').then(setIp).catch(() => setIp(null)); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
   const t = session?.totals;
   const acc = session?.account;
   useEffect(() => { if (open && t) { setAmount(centsToInput(Math.max(t.balance, 0))); setTendered(''); setErr(null); setSplit(null); } }, [open, t?.balance]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -130,7 +133,7 @@ export function PaymentModal({ open, session, onClose, onChanged }) {
   const amountC = parseCents(amount);
   const tenderedC = parseCents(tendered);
   const change = method === 'dinheiro' && tenderedC && amountC ? tenderedC - amountC : 0;
-  const methods = acc?.credit_cents > 0 ? [...METHODS, ['saldo_cliente', 'Crédito do cliente', PiggyBank]] : METHODS;
+  const methods = [...METHODS, ...(acc?.credit_cents > 0 ? [['saldo_cliente', 'Crédito do cliente', PiggyBank]] : []), ...(ip?.enabled ? [['infinitepay', 'InfinitePay (link/QR)', Zap]] : [])];
   const noCustomer = !session.customer_id;
   const fiadoAfter = acc ? acc.balance_cents - (amountC || 0) : null;
   const fiadoOver = method === 'fiado' && acc && -fiadoAfter > acc.fiado_limit_cents;
@@ -178,7 +181,7 @@ export function PaymentModal({ open, session, onClose, onChanged }) {
             <ul className="space-y-1 text-sm">
               {session.payments.map((p) => (
                 <li key={p.id} className="flex items-center justify-between gap-2">
-                  <span>{METHOD_LABEL[p.method] || p.method} {p.change_cents > 0 && <span className="text-xs text-muted">(troco {money(p.change_cents)})</span>}</span>
+                  <span>{METHOD_LABEL[p.method] || p.method}{p.source === 'integracao' ? ' · InfinitePay' : ''} {p.change_cents > 0 && <span className="text-xs text-muted">(troco {money(p.change_cents)})</span>}</span>
                   <span className="flex items-center gap-2">
                     {p.status === 'estornado' ? <Badge tone="bad">Estornado</Badge> : <Badge tone="ok">{money(p.amount_cents)}</Badge>}
                     {p.status === 'confirmado' && s.can('financeiro.estornar') && <button className="text-xs underline" onClick={() => refund(p)}>estornar</button>}
@@ -206,6 +209,7 @@ export function PaymentModal({ open, session, onClose, onChanged }) {
                 ))}
               </div>
               <Field label="Valor a pagar" className="mt-3"><input className="input text-2xl" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
+              {method === 'infinitepay' && <InfinitePayCharge key={`${session.id}-${amountC}`} session={session} amountC={amountC} phone={session.customer_phone} onPaid={() => onChanged()} />}
               {method === 'dinheiro' && (
                 <Field label="Valor entregue (para troco)" className="mt-2"><input className="input text-2xl" inputMode="decimal" value={tendered} onChange={(e) => setTendered(e.target.value)} placeholder="opcional" /></Field>
               )}
@@ -219,8 +223,8 @@ export function PaymentModal({ open, session, onClose, onChanged }) {
                   </div>
                 )
               ) : method === 'saldo_cliente' ? <p className="mt-2 text-xs text-muted">Usa o crédito antecipado do cliente (disponível {money(acc?.credit_cents)}). Não entra dinheiro no caixa agora.</p>
-                : method !== 'dinheiro' && <p className="mt-2 text-xs text-muted">Registro informado pelo operador. Cartão e Pix não geram troco.</p>}
-              {pending ? (
+                : method !== 'dinheiro' && method !== 'infinitepay' && <p className="mt-2 text-xs text-muted">Registro informado pelo operador. Cartão e Pix não geram troco.</p>}
+              {method === 'infinitepay' ? null : pending ? (
                 <button className="btn-primary btn-xl mt-3 w-full" disabled={busy} onClick={() => pay(pending)}>Resposta incerta — conferir e repetir sem duplicar</button>
               ) : (
                 <button className="btn-primary btn-xl mt-3 w-full" disabled={busy || !amountC || change < 0 || (method === 'fiado' && (noCustomer || !acc?.has_cpf))} onClick={() => pay()} data-pay>

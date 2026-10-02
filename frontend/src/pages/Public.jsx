@@ -231,3 +231,36 @@ export function Unsubscribe() {
     </Shell>
   );
 }
+
+// Retorno da InfinitePay depois do pagamento: confere na InfinitePay (pelo servidor) e mostra o resultado ao cliente
+export function PaymentReturn() {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    const p = new URLSearchParams(location.search);
+    const body = Object.fromEntries(['c', 'receipt_url', 'order_nsu', 'slug', 'capture_method', 'transaction_nsu'].map((k) => [k, p.get(k) || undefined]));
+    publicApi('/api/public/infinitepay/return', { method: 'POST', body }).then(setD).catch(setErr);
+  }, []);
+  return (
+    <Shell title="Pagamento">
+      <div className="mx-auto mt-8 max-w-md card p-6 text-center" data-payment-return>
+        <div className="flex justify-center"><Logo size={32} /></div>
+        {err ? <div className="mt-4"><ErrorBox error={err} /></div> : !d ? <div className="mt-4"><Loading /></div> : d.status === 'pago' ? (
+          <>
+            <CheckCircle2 className="mx-auto mt-4 text-ok" size={48} />
+            <h1 className="mt-2 font-display text-3xl">Pagamento recebido!</h1>
+            <p className="mt-1">{money(d.amount_cents)} · {d.company}</p>
+            <p className="text-sm text-muted">{d.description}</p>
+            {d.receipt_url && <a className="btn-ghost mt-3" href={d.receipt_url} target="_blank" rel="noreferrer">Ver comprovante</a>}
+          </>
+        ) : (
+          <>
+            <Clock className="mx-auto mt-4 text-warn" size={44} />
+            <h1 className="mt-2 font-display text-2xl">Estamos confirmando o pagamento</h1>
+            <p className="mt-1 text-sm text-muted">A confirmação chega em instantes no caixa. Pode mostrar esta tela ao atendente.</p>
+          </>
+        )}
+      </div>
+    </Shell>
+  );
+}

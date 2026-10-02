@@ -113,7 +113,7 @@ router.post('/sessions', h(async (req, res) => {
 async function loadSessionFull(db, ctx, id) {
   const s = (await db.query(
     `select s.*, c.number as card_number, t.number as table_number, u.name as opened_by_name, cu.points as customer_points,
-            cu.fiado_limit_cents as customer_fiado_limit, (cu.cpf is not null) as customer_has_cpf,
+            cu.fiado_limit_cents as customer_fiado_limit, (cu.cpf is not null) as customer_has_cpf, cu.phone as customer_phone,
             (select count(*)::int from order_items i where i.session_id = s.id and i.status = 'ativo' and i.sent_at is null and i.kitchen_status = 'novo') as pending_send
        from consumption_sessions s left join tab_cards c on c.id = s.card_id left join dining_tables t on t.id = s.table_id
        left join users u on u.id = s.opened_by left join customers cu on cu.id = s.customer_id where s.id = $1 and s.company_id = $2`, [id, ctx.companyId])).rows[0];

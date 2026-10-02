@@ -5,6 +5,7 @@ import { api, terminal } from '../lib/api.js';
 import { dateTime, bp } from '../lib/format.js';
 import { useSession, applyTheme } from '../lib/session.jsx';
 import Subscription from './Subscription.jsx';
+import { InfinitePaySettings } from '../components/InfinitePay.jsx';
 import { Badge, ErrorBox, Field, Loading, Modal, PageHeader, Toggle, useLoad, useToast } from '../components/ui.jsx';
 
 export default function Settings() {
@@ -15,6 +16,7 @@ export default function Settings() {
     ['usuarios', 'Usuários', s.can('usuarios.gerenciar')],
     ['perfis', 'Perfis e permissões', s.can('usuarios.gerenciar')],
     ['unidades', 'Unidades e terminais', true],
+    ['integracoes', 'Integrações', s.can('configuracoes.gerenciar')],
     ['assinatura', 'Assinatura', true],
     ['auditoria', 'Auditoria', s.can('auditoria.visualizar')],
   ].filter((t) => t[2]);
@@ -33,6 +35,7 @@ export default function Settings() {
             <Route path="usuarios" element={<Users />} />
             <Route path="perfis" element={<Roles />} />
             <Route path="unidades" element={<Units />} />
+            <Route path="integracoes" element={<InfinitePaySettings />} />
             <Route path="assinatura" element={<Subscription />} />
             <Route path="auditoria" element={<Audit />} />
           </Routes>

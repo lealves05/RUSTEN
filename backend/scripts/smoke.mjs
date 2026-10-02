@@ -913,6 +913,59 @@ await check('esqueci minha senha: link pela central, uso único, encerra sessõe
   assert.equal((await anon('POST', '/api/auth/login', { email: 'cx@teste.dev', password: 'Caixa2026xyzw' })).status, 401);
   assert.equal((await anon('POST', '/api/auth/login', { email: 'cx@teste.dev', password: 'NovaSenha2026xyz' })).status, 200);
 });
+await check('InfinitePay: link com o valor, aviso só vale conferido, pagamento entra uma vez na comanda', async () => {
+  const ipState = { links: [], paid: {} };
+  const fake = http.createServer((req, res) => {
+    let body = ''; req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      const b = body ? JSON.parse(body) : {};
+      res.writeHead(200, { 'content-type': 'application/json' });
+      if (req.url === '/links') { ipState.links.push(b); return res.end(JSON.stringify({ url: `https://checkout.infinitepay.io/${b.handle}/abc${ipState.links.length}` })); }
+      if (req.url === '/payment_check') { const p = ipState.paid[b.order_nsu]; return res.end(JSON.stringify(p ? { success: true, paid: true, amount: p.amount, paid_amount: p.amount, installments: 1, capture_method: p.method } : { success: true, paid: false })); }
+      res.end('{}');
+    });
+  });
+  await new Promise((r) => fake.listen(0, '127.0.0.1', r));
+  process.env.INFINITEPAY_API_URL = `http://127.0.0.1:${fake.address().port}`;
+  try {
+    assert.equal((await apiC('POST', '/api/infinitepay/charges', { session_id: 1, amount_cents: 100 })).data.code !== undefined, true);
+    assert.equal((await apiC('PUT', '/api/infinitepay/settings', { enabled: true, handle: '$Bar_Teste' })).data.handle, 'bar_teste');
+    await apiC('POST', '/api/floor/cards', { from: 201, count: 1 });
+    const card = (await apiC('GET', '/api/floor/cards')).data.cards.find((c) => c.number === 201);
+    const s = await apiC('POST', '/api/pdv/sessions', { kind: 'comanda', card_id: card.id });
+    await apiC('POST', '/api/pdv/items', { session_id: s.data.id, product_id: bIpa.id, qty: 1, launch_mode: 'manual', idempotency_key: key() });
+    const bal = (await apiC('GET', `/api/pdv/sessions/${s.data.id}`)).data.totals.balance;
+    assert.equal((await apiC('POST', '/api/infinitepay/charges', { session_id: s.data.id, amount_cents: bal + 1 })).status, 400);
+    const ch = await apiC('POST', '/api/infinitepay/charges', { session_id: s.data.id, amount_cents: bal, api_base: base });
+    assert.equal(ch.status, 201, JSON.stringify(ch.data)); assert.equal(ch.data.status, 'pendente'); assert.match(ch.data.link_url, /checkout\.infinitepay\.io/);
+    const sent = ipState.links.at(-1);
+    assert.equal(sent.items[0].price, bal); assert.equal(sent.order_nsu, ch.data.order_nsu);
+    const hook = sent.webhook_url.replace(/^https?:\/\/[^/]+/, base);
+    const post = (u, b) => fetch(u, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) });
+    // aviso falso (pedido de outro) e aviso sem pagamento confirmado não lançam nada
+    assert.equal((await post(hook, { order_nsu: 'OUTRO', transaction_nsu: 't1', invoice_slug: 's1' })).status, 400);
+    assert.equal((await post(hook, { order_nsu: ch.data.order_nsu, transaction_nsu: 't1', invoice_slug: 's1', capture_method: 'pix' })).status, 200);
+    assert.equal((await apiC('GET', `/api/infinitepay/charges/${ch.data.id}`)).data.status, 'pendente');
+    // confirmado na InfinitePay: entra uma única vez, como integração
+    ipState.paid[ch.data.order_nsu] = { amount: bal, method: 'pix' };
+    for (let i = 0; i < 2; i++) assert.equal((await post(hook, { order_nsu: ch.data.order_nsu, transaction_nsu: 't1', invoice_slug: 's1', capture_method: 'pix', receipt_url: 'https://comprovante.test/1' })).status, 200);
+    const done = (await apiC('GET', `/api/infinitepay/charges/${ch.data.id}`)).data;
+    assert.equal(done.status, 'pago'); assert.equal(done.confirmed_by, 'webhook');
+    const full = (await apiC('GET', `/api/pdv/sessions/${s.data.id}`)).data;
+    const pays = full.payments.filter((p) => p.source === 'integracao');
+    assert.equal(pays.length, 1); assert.equal(pays[0].method, 'pix'); assert.equal(full.totals.balance, 0);
+    // valor conferido diferente do cobrado: fica para conferência, sem lançar
+    await apiC('POST', '/api/pdv/items', { session_id: s.data.id, product_id: bIpa.id, qty: 1, launch_mode: 'manual', idempotency_key: key() });
+    const bal2 = (await apiC('GET', `/api/pdv/sessions/${s.data.id}`)).data.totals.balance;
+    const ch2 = await apiC('POST', '/api/infinitepay/charges', { session_id: s.data.id, amount_cents: bal2, api_base: base });
+    ipState.paid[ch2.data.order_nsu] = { amount: bal2 - 100, method: 'credit_card' };
+    const ret = await anon('POST', '/api/public/infinitepay/return', { c: ipState.links.at(-1).redirect_url.split('c=')[1], transaction_nsu: 't2', slug: 's2', capture_method: 'credit_card' });
+    assert.equal(ret.status, 200, JSON.stringify(ret.data));
+    assert.equal((await apiC('GET', `/api/infinitepay/charges/${ch2.data.id}`)).data.status, 'divergente');
+    const panel = (await apiC('GET', '/api/infinitepay/charges')).data;
+    assert.equal(panel.totals.pix, bal); assert.equal(panel.totals.divergente, bal2);
+  } finally { fake.close(); delete process.env.INFINITEPAY_API_URL; }
+});
 await check('remoção da demonstração preserva produtos já vendidos', async () => {
   const login = await anon('POST', '/api/auth/login', { email: 'a@teste.dev', password: 'Motocustom2026x' });
   const a2 = client(login.data.access_token, A.terminal);

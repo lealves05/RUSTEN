@@ -32,6 +32,8 @@ const PublicMenu = lazy(() => PublicPages.then((m) => ({ default: m.PublicMenu }
 const PublicOrder = lazy(() => PublicPages.then((m) => ({ default: m.PublicOrder })));
 const PublicReview = lazy(() => PublicPages.then((m) => ({ default: m.PublicReview })));
 const Unsubscribe = lazy(() => PublicPages.then((m) => ({ default: m.Unsubscribe })));
+const InfinitePayPage = lazy(() => import('./components/InfinitePay.jsx').then((m) => ({ default: m.InfinitePayPanel })));
+const PaymentReturn = lazy(() => PublicPages.then((m) => ({ default: m.PaymentReturn })));
 const L = (el) => <Suspense fallback={<Loading />}>{el}</Suspense>;
 
 function Guard({ children }) {
@@ -50,6 +52,7 @@ function App() {
       <Route path="/pedido/:token" element={L(<PublicOrder />)} />
       <Route path="/avaliar/:token" element={L(<PublicReview />)} />
       <Route path="/sair/:token" element={L(<Unsubscribe />)} />
+      <Route path="/pagamento/concluido" element={L(<PaymentReturn />)} />
       <Route path="/entrar" element={s.me ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/cadastro" element={s.me ? <Navigate to="/" replace /> : <Register />} />
       <Route path="/esqueci-senha" element={<ForgotPassword />} />
@@ -63,6 +66,7 @@ function App() {
         <Route path="salao" element={<Suspense fallback={<Loading />}><Floor /></Suspense>} />
         <Route path="cardapio" element={<Suspense fallback={<Loading />}><Menu /></Suspense>} />
         <Route path="financeiro/caixa" element={<Suspense fallback={<Loading />}><Cash /></Suspense>} />
+        <Route path="financeiro/infinitepay" element={L(<InfinitePayPage />)} />
         <Route path="configuracoes/*" element={<Suspense fallback={<Loading />}><Settings /></Suspense>} />
         <Route path="suporte" element={<Suspense fallback={<Loading />}><Support /></Suspense>} />
         <Route path="clientes" element={L(<Customers />)} />

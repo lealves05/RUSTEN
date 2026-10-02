@@ -9,6 +9,7 @@ import { deliveryConfig, createDeliveryOrder, STATUS_LABEL, parseReviewToken } f
 import { parseUnsubscribe } from './marketing.js';
 import { handleIncoming } from '../lib/agent.js';
 import { sessionTotals } from '../lib/pdv.js';
+import { confirmCharge, logEvent } from '../lib/infinitepay.js';
 
 export const router = Router();
 
@@ -136,4 +137,33 @@ router.post('/whatsapp/:slug', h(async (req, res) => {
     }
   }
   res.json({ ok: true });
+}));
+
+// ---- InfinitePay: webhook do pagamento e retorno do cliente (o token na URL identifica a cobrança) ----
+// O aviso só vale depois de conferido na própria InfinitePay (payment_check). Erro de conferência → 400, e a InfinitePay reenvia.
+async function chargeByToken(token) {
+  if (!/^[0-9a-f]{36}$/.test(String(token))) return null;
+  return (await q('select * from infinitepay_charges where token = $1', [token])).rows[0] || null;
+}
+router.post('/infinitepay/webhook/:token', h(async (req, res) => {
+  const c = await chargeByToken(req.params.token);
+  if (!c) return res.status(404).json({ ok: false });
+  const b = req.body || {};
+  await logEvent({ query: q }, c, 'webhook', b);
+  if (b.order_nsu && String(b.order_nsu) !== c.order_nsu) return res.status(400).json({ ok: false, error: 'pedido não confere' });
+  try {
+    await confirmCharge(tx, c.id, { transaction_nsu: b.transaction_nsu, invoice_slug: b.invoice_slug, capture_method: b.capture_method, receipt_url: b.receipt_url }, 'webhook');
+    res.json({ ok: true });
+  } catch { res.status(400).json({ ok: false }); }
+}));
+router.post('/infinitepay/return', h(async (req, res) => {
+  await rateLimit(`ip-return:${req.ip}`, 60, 600);
+  const b = req.body || {};
+  const c = await chargeByToken(b.c);
+  if (!c) return res.status(404).json({ error: 'Pagamento não encontrado' });
+  await logEvent({ query: q }, c, 'retorno', { ...b, c: undefined });
+  let r = c;
+  try { r = await confirmCharge(tx, c.id, { transaction_nsu: b.transaction_nsu, invoice_slug: b.slug, capture_method: b.capture_method, receipt_url: b.receipt_url }, 'retorno'); } catch { /* o webhook confirma depois */ }
+  const co = (await q('select name from companies where id = $1', [c.company_id])).rows[0];
+  res.json({ status: r.status === 'divergente' ? 'pago' : r.status, amount_cents: Number(c.amount_cents), description: c.description, company: co?.name, receipt_url: r.receipt_url || b.receipt_url || null });
 }));

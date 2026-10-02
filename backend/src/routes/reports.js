@@ -100,16 +100,23 @@ async function build(ctx, r) {
     const imps = (await q('select id, period_from, period_to, gross_cents, methods from pos_sales_imports where id = any($1::bigint[])', [[...new Set(extDays.map((d) => d.import_id))]])).rows;
     const byMethod = {};
     let exact = true;
+    let extCmv = 0;
+    // custo dos insumos que saíram do estoque pelos produtos da maquininha (por importação)
+    const costs = Object.fromEntries((await q(`select i.import_id, coalesce(sum(-m.qty * m.unit_cost_cents),0)::float as cost
+        from pos_sales_items i join stock_movements m on m.company_id = i.company_id and m.ref_type = 'pos_sales_item' and m.ref_id = i.id and m.kind = 'venda'
+       where i.import_id = any($1::bigint[]) and i.status = 'baixado' group by i.import_id`, [imps.map((i) => i.id)])).rows.map((x) => [Number(x.import_id), x.cost]));
     for (const i of imps) {
       const part = extDays.filter((d) => d.import_id === i.id).reduce((a, d) => a + Number(d.gross_cents), 0);
       if (i.period_from < r.from || i.period_to > r.to) exact = false; // relatório maior que o período: formas proporcionais
       const f = i.gross_cents ? part / i.gross_cents : 0;
       for (const m of i.methods) byMethod[m.method] = (byMethod[m.method] || 0) + Math.round(m.gross_cents * f);
+      extCmv += Math.round((costs[Number(i.id)] || 0) * f);
     }
     const tot = (k) => extDays.reduce((a, d) => a + Number(d[k]), 0);
     external = { gross_cents: tot('gross_cents'), net_cents: tot('net_cents'), fee_cents: tot('gross_cents') - tot('net_cents'), tx_count: tot('tx_count'),
       by_day: extDays.map(({ day, gross_cents, net_cents, tx_count }) => ({ day, gross_cents, net_cents, tx_count })),
-      by_method: Object.entries(byMethod).map(([method, total]) => ({ method, total })).sort((a, b) => b.total - a.total), methods_exact: exact, imports: imps.length };
+      by_method: Object.entries(byMethod).map(([method, total]) => ({ method, total })).sort((a, b) => b.total - a.total), methods_exact: exact, imports: imps.length,
+      cmv_cents: cmv ? extCmv : null };
   }
   const cogs = byProduct.reduce((s, p) => s + Number(p.cost_cents), 0);
   const money = (v) => (fin ? v : null);
@@ -119,8 +126,8 @@ async function build(ctx, r) {
   const dre = fin && cmv ? {
     receita_bruta: revenue, taxa_servico: Number(sum.service_fee_cents), taxa_entrega: Number(sum.delivery_fee_cents), cmv: cogs,
     lucro_bruto: Number(sum.items_cents) - cogs, despesas_caixa: Number(movements?.find((m) => m.kind === 'despesa')?.total || 0),
-    maquininha_bruta: external?.gross_cents || 0, maquininha_taxas: external?.fee_cents || 0,
-    resultado: Number(sum.items_cents) - cogs - Number(movements?.find((m) => m.kind === 'despesa')?.total || 0) + (external?.net_cents || 0),
+    maquininha_bruta: external?.gross_cents || 0, maquininha_taxas: external?.fee_cents || 0, maquininha_cmv: external?.cmv_cents || 0,
+    resultado: Number(sum.items_cents) - cogs - Number(movements?.find((m) => m.kind === 'despesa')?.total || 0) + (external?.net_cents || 0) - (external?.cmv_cents || 0),
   } : null;
   return {
     period: { from: r.from, to: r.to }, permissions: { financial: fin, cmv },

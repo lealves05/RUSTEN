@@ -1011,6 +1011,55 @@ await check('vendas da maquininha: importa o relatório, confere, evita duplicar
   const again = await api('POST', '/api/pos-sales', { file_name: 'relatorio_vendas.pdf', file_b64: pdf('a'), mode: 'externa', report: rep });
   assert.equal(again.status, 201, JSON.stringify(again.data)); // depois de cancelar, pode importar de novo
 });
+await check('vendas da maquininha: produtos do relatório viram saída de estoque (ficha/acabado), lembram o vínculo e estornam ao cancelar', async () => {
+  const pdf = (tag) => Buffer.from(`%PDF-1.7\n% estoque ${tag}\n${'y'.repeat(200)}\n%%EOF`).toString('base64');
+  const pilsProd = bProducts.find((p) => p.name.startsWith('Pilsen'));
+  await apiC('PUT', '/api/stock/settings', { enabled: true, allow_negative: true });
+  const rep = (from, to, day) => ({ period_from: from, period_to: to, gross_cents: 10000, net_cents: 9800, fee_cents: 200, tx_count: 5,
+    days: [{ day, gross_cents: 10000, net_cents: 9800, tx_count: 5 }], methods: [{ label: 'Débito', gross_cents: 10000 }],
+    products: [{ name: 'HAMBURGUER classico', qty: 3 }, { name: 'PILSEN', qty: 2 }, { name: 'Coisa que não existe', qty: 1 }], categories: [{ name: 'X', qty: 8 }] });
+  const bal = async () => Object.fromEntries((await apiC('GET', '/api/stock/items')).data.map((x) => [x.id, x.balance]));
+  const imp = await apiC('POST', '/api/pos-sales', { file_name: 'e1.pdf', file_b64: pdf('1'), mode: 'externa', report: rep('2026-08-01', '2026-08-31', '2026-08-10') });
+  assert.equal(imp.status, 201, JSON.stringify(imp.data));
+  const v = (await apiC('GET', `/api/pos-sales/${imp.data.id}/items`)).data;
+  assert.equal(v.rows.length, 3); assert.equal(v.summary.missing_qty, 2); assert.equal(v.can_post, true);
+  const burgerRow = v.rows.find((r) => r.report_name.startsWith('HAMBURGUER'));
+  assert.equal(burgerRow.suggestion?.product_id, bBurger.id, JSON.stringify(burgerRow)); // sugere pelo nome parecido
+  // não lança com linha sem produto
+  assert.equal((await apiC('POST', `/api/pos-sales/${imp.data.id}/items/post`)).data.code, 'unmapped');
+  const rows = v.rows.map((r) => ({ id: r.id, qty: r.qty, product_id: r.report_name.startsWith('HAMB') ? bBurger.id : r.report_name === 'PILSEN' ? pilsProd.id : null, ignored: r.report_name.startsWith('Coisa') }));
+  rows.push({ qty: 1, product_id: bBurger.id, report_name: 'faltou no relatório' });
+  const saved = await apiC('PUT', `/api/pos-sales/${imp.data.id}/items`, { rows });
+  assert.equal(saved.status, 200, JSON.stringify(saved.data)); assert.equal(saved.data.rows.length, 4);
+  assert.ok(saved.data.rows.find((r) => r.product_id === bBurger.id).stock.length >= 2); // prévia dos insumos
+  const b0 = await bal();
+  const post = await apiC('POST', `/api/pos-sales/${imp.data.id}/items/post`);
+  assert.equal(post.status, 200, JSON.stringify(post.data)); assert.equal(post.data.posted, 3);
+  const b1 = await bal();
+  assert.equal(Math.round((b0[carne] - b1[carne]) * 1000) / 1000, 0.8); // 4 hambúrgueres × 0,2 kg
+  assert.equal((await apiC('POST', `/api/pos-sales/${imp.data.id}/items/post`)).status, 400); // nada pendente: não baixa duas vezes
+  const after = (await apiC('GET', `/api/pos-sales/${imp.data.id}/items`)).data;
+  assert.ok(after.rows.filter((r) => r.status === 'baixado').every((r) => r.moved.length));
+  // linha lançada não muda pelo banco
+  await assert.rejects(pool.query("update pos_sales_items set qty = 99 where import_id = $1 and status = 'baixado'", [imp.data.id]));
+  // próximo relatório reconhece o nome sozinho
+  const imp2 = await apiC('POST', '/api/pos-sales', { file_name: 'e2.pdf', file_b64: pdf('2'), mode: 'externa', report: rep('2026-07-01', '2026-07-31', '2026-07-10') });
+  const v2 = (await apiC('GET', `/api/pos-sales/${imp2.data.id}/items`)).data;
+  assert.equal(v2.rows.find((r) => r.report_name.startsWith('HAMB')).product_id, bBurger.id);
+  assert.equal(v2.rows.find((r) => r.report_name === 'PILSEN').product_id, pilsProd.id);
+  // DRE com o custo dos insumos da maquininha
+  const dre = (await apiC('GET', '/api/reports/overview?from=2026-08-01&to=2026-08-31')).data;
+  assert.ok(dre.external.cmv_cents > 0); assert.equal(dre.dre.maquininha_cmv, dre.external.cmv_cents);
+  // cancelar a importação estorna o estoque
+  assert.equal((await apiC('POST', `/api/pos-sales/${imp.data.id}/cancel`, { reason: 'teste de estorno' })).status, 200);
+  const b2 = await bal();
+  assert.equal(Math.round(b2[carne] * 1000), Math.round(b0[carne] * 1000));
+  assert.ok((await apiC('GET', `/api/pos-sales/${imp.data.id}/items`)).data.rows.filter((r) => r.moved).every((r) => r.status === 'estornado'));
+  // importação "já lançadas nas comandas" não baixa de novo
+  const imp3 = await apiC('POST', '/api/pos-sales', { file_name: 'e3.pdf', file_b64: pdf('3'), mode: 'conferencia', report: rep('2026-06-01', '2026-06-30', '2026-06-10') });
+  await apiC('GET', `/api/pos-sales/${imp3.data.id}/items`);
+  assert.equal((await apiC('POST', `/api/pos-sales/${imp3.data.id}/items/post`)).data.code, 'conference_only');
+});
 await check('remoção da demonstração preserva produtos já vendidos', async () => {
   const login = await anon('POST', '/api/auth/login', { email: 'a@teste.dev', password: 'Motocustom2026x' });
   const a2 = client(login.data.access_token, A.terminal);

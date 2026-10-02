@@ -1,7 +1,7 @@
 // Financeiro › Vendas da maquininha: importa o "Relatório de vendas" da InfinitePay (PDF) com as vendas feitas
 // direto na maquininha, confere os números, compara com o que já foi lançado no RUSTEN e registra.
-import { useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Download, FileUp, Info, Loader2, XCircle } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { AlertTriangle, CheckCircle2, Download, FileUp, Info, Loader2, PackageMinus, Plus, Trash2, XCircle } from 'lucide-react';
 import { api, download } from '../lib/api.js';
 import { money, dateBR, dateTime } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
@@ -217,8 +217,7 @@ function Detail({ id, onClose, onChanged }) {
                 <table className="table-clean"><tbody>{x.categories.map((c) => <tr key={c.name}><td>{c.name}</td><td className="text-right">{c.qty}</td></tr>)}</tbody></table></>}
             </section>
           </div>
-          {x.products.length > 0 && <section><h3 className="mb-1 font-display text-xl">Produtos mais vendidos na maquininha</h3>
-            <div className="flex flex-wrap gap-1">{x.products.map((p) => <span key={p.name} className="chip">{p.name} · {p.qty}</span>)}</div></section>}
+          <StockOut key={`${id}-${x.status}`} id={id} />
           {x.notes.length > 0 && <p className="flex gap-2 text-xs text-muted"><Info size={14} className="shrink-0" /> {x.notes.join(' ')}</p>}
           {canceling && (
             <div className="card space-y-2 border-rust p-3">
@@ -240,10 +239,114 @@ function Help() {
         <li>O relatório precisa ter os <b>valores por dia</b>. O RUSTEN confere se a soma dos dias e das formas bate com os totais antes de registrar.</li>
         <li><b>Vendas feitas só na maquininha</b> somam ao faturamento dos relatórios (bruto, taxas e líquido), na data do relatório.</li>
         <li><b>Já lançadas nas comandas</b>: use quando as vendas também foram registradas no Receber do RUSTEN; ficam só para conferência.</li>
-        <li>A coluna <b>Já no RUSTEN</b> mostra o cartão e o Pix lançados nas comandas no mesmo dia, para você decidir.</li>
+        <li>A coluna <b>No RUSTEN</b> mostra o cartão e o Pix lançados nas comandas no mesmo dia, para você decidir.</li>
         <li>O mesmo arquivo não entra duas vezes, e um dia não pode estar em duas importações ativas. Para corrigir, cancele (com motivo) ou importe um relatório novo marcando "Substituir".</li>
-        <li>Os produtos do relatório são informativos (a InfinitePay avisa que o ranking pode ser parcial) e não baixam estoque.</li>
+        <li><b>Saída no estoque</b>: nos detalhes da importação, ligue cada produto da maquininha a um produto do cardápio e toque em <b>Lançar saída no estoque</b>. O estoque sai pela ficha técnica ou pelo produto acabado, uma única vez; o RUSTEN lembra o vínculo para os próximos relatórios.</li>
+        <li>O relatório da InfinitePay traz só os produtos mais vendidos: acrescente à mão o que faltar antes de lançar. Cancelar a importação estorna a saída.</li>
       </ul>
     </details>
+  );
+}
+
+const qtyBR = (n) => Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
+const STATUS = { pendente: ['warn', 'a lançar'], ignorado: ['muted', 'ignorado'], baixado: ['ok', 'lançado'], estornado: ['muted', 'estornado'] };
+
+// Produtos vendidos na maquininha → saída no estoque (pela ficha técnica ou produto acabado do cardápio)
+function StockOut({ id }) {
+  const toast = useToast();
+  const d = useLoad(() => api(`/api/pos-sales/${id}/items`), [id]);
+  const [rows, setRows] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    if (!d.data) return;
+    // sugestão pelo nome já vem marcada (confira antes de lançar)
+    setRows(d.data.rows.map((r) => ({ ...r, ignored: r.status === 'ignorado', product_id: r.product_id ?? r.suggestion?.product_id ?? null, suggested: !r.product_id && !!r.suggestion })));
+    setDirty(d.data.rows.some((r) => !r.product_id && r.suggestion));
+  }, [d.data]);
+  if (d.loading && !d.data) return <Loading />;
+  if (d.error) return <ErrorBox error={d.error} onRetry={d.reload} />;
+  const v = d.data;
+  if (!v.rows.length && !rows.length && v.status !== 'ativo') return null;
+  const editable = v.status === 'ativo' && v.mode === 'externa' && v.can_edit;
+  const open = (r) => r.status === 'pendente' || r.status === 'ignorado' || !r.status;
+  const set = (i, patch) => { setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch, suggested: patch.product_id !== undefined ? false : r.suggested } : r))); setDirty(true); };
+  const payload = () => ({ rows: rows.map((r) => ({ ...(r.id ? { id: r.id } : { report_name: r.report_name || undefined }), qty: Number(r.qty), product_id: r.product_id ? Number(r.product_id) : null, ignored: !!r.ignored })) });
+  const save = async () => {
+    setBusy(true);
+    try { await api(`/api/pos-sales/${id}/items`, { method: 'PUT', body: payload() }); d.reload(); setDirty(false); toast('Conferência salva'); }
+    catch (e) { toast(e.message, 'bad'); } finally { setBusy(false); }
+  };
+  const post = async () => {
+    setBusy(true);
+    try {
+      await api(`/api/pos-sales/${id}/items`, { method: 'PUT', body: payload() });
+      const r = await api(`/api/pos-sales/${id}/items/post`, { method: 'POST' });
+      toast(`Saída lançada no estoque: ${r.posted} produto(s)${r.without_stock.length ? ` — sem controle de estoque: ${r.without_stock.join(', ')}` : ''}`);
+      setDirty(false); d.reload();
+    } catch (e) { toast(e.message, 'bad'); } finally { setBusy(false); }
+  };
+  const pending = rows.filter((r) => open(r) && !r.ignored);
+  const product = (pid) => v.products.find((p) => Number(p.id) === Number(pid));
+  // prévia calculada no servidor para o produto salvo (a quantidade é ajustada na hora)
+  const srvRow = (r) => (r.id ? v.rows.find((o) => o.id === r.id) : null);
+  const srvStock = (r) => { const o = srvRow(r); return o && Number(o.product_id) === Number(r.product_id) && o.stock?.length ? o.stock : null; };
+  return (
+    <section className="space-y-2" data-pos-stock>
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="font-display text-xl"><PackageMinus size={18} className="mr-1 inline" />Produtos vendidos → saída no estoque</h3>
+        {v.rows.length > 0 && v.rows.every((r) => r.status !== 'pendente') && v.rows.some((r) => r.status === 'baixado') && <Badge tone="ok">estoque lançado</Badge>}
+      </div>
+      {v.mode !== 'externa' && <Alert tone="warn">Importação de conferência: estas vendas já baixaram o estoque pelas comandas, então não há saída a lançar.</Alert>}
+      {v.mode === 'externa' && v.summary.missing_qty > 0 && (
+        <Alert tone="warn">O relatório da InfinitePay mostra só os produtos mais vendidos: {qtyBR(v.summary.report_qty)} de {qtyBR(v.summary.categories_qty)} itens vendidos.
+          Acrescente os {qtyBR(v.summary.missing_qty)} que faltam em <b>Acrescentar produto</b> antes de lançar, para o estoque ficar certo.</Alert>
+      )}
+      {!rows.length ? <p className="text-sm text-muted">O relatório não trouxe produtos. Acrescente os produtos vendidos para lançar a saída.</p> : (
+        <div className="overflow-x-auto"><table className="table-clean" data-pos-stock-table>
+          <thead><tr><th>Na maquininha</th><th className="w-24 text-right">Qtd</th><th>Produto do RUSTEN</th><th>Sai do estoque</th><th>Situação</th><th /></tr></thead>
+          <tbody>{rows.map((r, i) => {
+            const p = product(r.product_id);
+            const can = editable && open(r);
+            return (
+              <tr key={r.id || `n${i}`} className={r.ignored ? 'opacity-60' : ''} data-pos-row={r.report_name}>
+                <td className="font-semibold">{r.source === 'manual' || !r.id ? <span>{r.report_name || 'Acrescentado'} <span className="text-xs font-normal text-muted">(à mão)</span></span> : r.report_name}</td>
+                <td className="text-right">{can ? <input className="input w-20 py-1 text-right" type="number" min="0.001" step="1" value={r.qty} onChange={(e) => set(i, { qty: e.target.value })} data-pos-qty /> : qtyBR(r.qty)}</td>
+                <td className="min-w-[200px]">
+                  {can ? (
+                    <select className={`input py-1 ${r.suggested ? 'border-warn' : ''}`} value={r.product_id || ''} disabled={r.ignored} onChange={(e) => set(i, { product_id: e.target.value ? Number(e.target.value) : null })} data-pos-product>
+                      <option value="">— escolha o produto —</option>
+                      {v.products.map((x) => <option key={x.id} value={x.id}>{x.name}{x.stock_mode === 'nenhum' ? ' (sem estoque)' : ''}</option>)}
+                    </select>
+                  ) : (p?.name || r.product_name || '—')}
+                  {can && r.suggested && <div className="text-xs text-warn">sugerido pelo nome — confira</div>}
+                </td>
+                <td className="text-xs">
+                  {r.moved?.length ? r.moved.map((m) => `${qtyBR(m.qty)} ${m.unit} ${m.name}`).join(' · ')
+                    : srvStock(r) ? srvStock(r).map((m) => `${qtyBR(m.qty * (Number(r.qty) / Number(srvRow(r).qty)))} ${m.unit} ${m.name}`).join(' · ')
+                      : p && p.stock_mode === 'nenhum' ? <span className="text-muted">produto sem controle de estoque</span>
+                        : p ? <span className="text-muted">{dirty ? 'salve para ver' : '—'}</span> : <span className="text-muted">—</span>}
+                </td>
+                <td>{r.ignored && open(r) ? <Badge tone="muted">ignorado</Badge> : <Badge tone={STATUS[r.status || 'pendente'][0]}>{STATUS[r.status || 'pendente'][1]}</Badge>}</td>
+                <td className="whitespace-nowrap">{can && (r.id && r.source !== 'manual'
+                  ? <label className="text-xs"><input type="checkbox" checked={!!r.ignored} onChange={(e) => set(i, { ignored: e.target.checked })} data-pos-ignore /> ignorar</label>
+                  : <button className="btn-ghost p-1" title="Remover" onClick={() => { setRows((rs) => rs.filter((_, j) => j !== i)); setDirty(true); }}><Trash2 size={14} /></button>)}</td>
+              </tr>
+            );
+          })}</tbody>
+        </table></div>
+      )}
+      {editable && (
+        <div className="flex flex-wrap gap-2">
+          <button className="btn-ghost" onClick={() => { setRows((rs) => [...rs, { report_name: '', qty: 1, product_id: null, source: 'manual', status: 'pendente' }]); setDirty(true); }} data-pos-add><Plus size={16} /> Acrescentar produto</button>
+          <button className="btn-ghost" disabled={busy || !dirty} onClick={save} data-pos-save>Salvar conferência</button>
+          <button className="btn-primary ml-auto" disabled={busy || !pending.length || pending.some((r) => !r.product_id)} onClick={post} data-pos-post>
+            {busy ? <Loader2 size={16} className="animate-spin" /> : <PackageMinus size={16} />} Lançar saída no estoque ({pending.length})
+          </button>
+        </div>
+      )}
+      {editable && pending.some((r) => !r.product_id) && <p className="text-xs text-rust">Escolha o produto de cada linha ou marque "ignorar" para lançar.</p>}
+      {!v.can_edit && v.mode === 'externa' && v.status === 'ativo' && <p className="text-xs text-muted">Lançar a saída exige a permissão "Ajustar estoque".</p>}
+    </section>
   );
 }

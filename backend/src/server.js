@@ -44,12 +44,14 @@ export function createApp() {
     allowedHeaders: ['content-type', 'authorization', 'x-terminal-id'] }));
   // F11: respostas da API não ficam em cache (dados pessoais, financeiros e tokens)
   app.use('/api', (_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
-  // Corpo cru preservado para conferir assinaturas da central
-  // foto da nota fiscal (até ~6 MB em base64) só nesta rota
-  app.use('/api/stock/notes/read', express.json({ limit: '9mb' }));
-  // relatório de vendas da maquininha (PDF original em base64, até 5 MB)
-  app.use(['/api/pos-sales', '/api/pos-sales/preview'], express.json({ limit: '8mb' }));
-  app.use(express.json({ limit: '1mb', verify: (req, _res, buf) => { req.rawBody = buf.toString('utf8'); } }));
+  // Um único leitor de corpo por requisição: na Edge (Deno) o corpo só pode ser lido uma vez, e um segundo
+  // leitor falha com "stream is not readable". Rotas com arquivo (foto da nota, relatório da maquininha) têm limite maior.
+  // O corpo cru fica guardado para conferir assinaturas da central.
+  const verify = (req, _res, buf) => { req.rawBody = buf.toString('utf8'); };
+  const bigJson = express.json({ limit: '9mb', verify });
+  const json = express.json({ limit: '1mb', verify });
+  const BIG = /^\/api\/(stock\/notes\/read|pos-sales(\/preview)?)\/?$/;
+  app.use((req, res, next) => (BIG.test(req.path) ? bigJson : json)(req, res, next));
 
   app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'rusten-api' }));
   app.use('/api/auth', authRouter);

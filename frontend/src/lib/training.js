@@ -66,6 +66,8 @@ export const LESSONS = [
     desc: 'Corrigir o saldo de um item com motivo, justificativa, limites e aprovação por outra pessoa.', learn: ['Informar o saldo real', 'Aplicação direta ou aprovação', 'Histórico e CSV para auditoria'] },
   { n: 24, file: '24-fiado-e-credito', mod: 'clientes', s: 69, title: 'Fiado e crédito do cliente', routes: ['/clientes', '/salao'],
     desc: 'Pendurar no fiado pelo CPF, receber o fiado, lançar crédito antecipado e ver tudo na comanda.', learn: ['Fiado com limite pelo CPF', 'Aviso de fiado ao receber', 'Crédito antecipado e extrato'] },
+  { n: 25, file: '25-vendas-da-maquininha', mod: 'pdv', s: 79, title: 'Vendas da maquininha (relatório InfinitePay)', routes: ['/financeiro/maquininha', '/relatorios'],
+    desc: 'Importar o relatório de vendas da InfinitePay com as vendas feitas direto na maquininha, conferir e ver nos relatórios.', learn: ['Importar o PDF do relatório', 'Conferência antes de registrar', 'Maquininha nos relatórios e na DRE'] },
 ];
 
 export const videoUrl = (l) => `/treinamento/${l.file}.mp4`;

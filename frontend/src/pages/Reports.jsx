@@ -85,6 +85,7 @@ function Overview({ d }) {
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
         <Kpi label="Faturamento" value={m(s.revenue_cents)} hint={fin ? `consumo ${money(s.items_cents)} + serviço ${money(s.service_fee_cents)} + entrega ${money(s.delivery_fee_cents)}` : null} />
         <Kpi label="Recebido" value={m(s.received_cents)} />
+        {s.external_cents > 0 && <Kpi label="Maquininha (fora do RUSTEN)" value={money(s.external_cents)} hint={`total com maquininha ${money(s.revenue_total_cents)}`} />}
         <Kpi label="Ticket médio" value={m(s.ticket_cents)} hint={`${s.sessions} consumo(s) encerrado(s)`} />
         <Kpi label="Em aberto agora" value={m(s.open_balance_cents)} hint={`${s.open_sessions} consumo(s) aberto(s)`} />
         {d.permissions.cmv && <><Kpi label="CMV" value={money(s.cmv_cents)} /><Kpi label="Margem bruta" value={s.margin_pct != null ? `${s.margin_pct.toLocaleString('pt-BR')}%` : '—'} /></>}
@@ -184,12 +185,26 @@ function Financial({ d, exp }) {
           <tr><td>Diferença total</td><td className="text-right">{money(d.cash.difference_cents)}</td></tr>
           {d.movements.map((x) => <tr key={x.kind}><td className="capitalize">{x.kind}s</td><td className="text-right" colSpan={1}>{money(x.total)}</td></tr>)}
           <tr><td>Taxa de serviço (conta separada)</td><td className="text-right">{money(d.summary.service_fee_cents)}</td></tr></tbody></table></section>
+      {d.external && <section className="card overflow-x-auto lg:col-span-2" data-report-external>
+        <div className="flex items-center justify-between p-3"><h3 className="font-display text-xl">Vendas na maquininha (fora do RUSTEN)</h3><a className="btn-ghost no-print py-1 text-xs" href="/financeiro/maquininha">Importações</a></div>
+        <div className="grid grid-cols-2 gap-2 px-3 md:grid-cols-4">
+          <Kpi label="Bruto" value={money(d.external.gross_cents)} /><Kpi label="Taxas" value={money(d.external.fee_cents)} /><Kpi label="Líquido" value={money(d.external.net_cents)} /><Kpi label="Transações" value={d.external.tx_count} />
+        </div>
+        <div className="grid items-start gap-4 p-3 lg:grid-cols-2">
+          <table className="table-clean"><thead><tr><th>Dia</th><th className="text-right">Bruto</th><th className="text-right">Líquido</th><th className="text-right">Transações</th></tr></thead>
+            <tbody>{d.external.by_day.map((x) => <tr key={x.day}><td>{dateBR(x.day)}</td><td className="text-right">{money(x.gross_cents)}</td><td className="text-right">{money(x.net_cents)}</td><td className="text-right">{x.tx_count}</td></tr>)}</tbody></table>
+          <div><table className="table-clean"><thead><tr><th>Forma</th><th className="text-right">Bruto</th></tr></thead>
+            <tbody>{d.external.by_method.map((x) => <tr key={x.method}><td>{METHOD[x.method] || x.method}</td><td className="text-right">{money(x.total)}</td></tr>)}</tbody></table>
+            {!d.external.methods_exact && <p className="mt-1 text-xs text-muted">O relatório importado cobre um período maior que o escolhido: as formas foram rateadas pela proporção dos dias.</p>}</div>
+        </div></section>}
       {d.dre && <section className="card p-4 lg:col-span-2"><h3 className="font-display text-xl">DRE gerencial (simplificada)</h3>
         <table className="table-clean mt-2"><tbody>
           <tr><td>Receita de consumo</td><td className="text-right">{money(d.dre.receita_bruta - d.dre.taxa_servico - d.dre.taxa_entrega)}</td></tr>
           <tr><td>(−) CMV</td><td className="text-right text-rust">{money(-d.dre.cmv)}</td></tr>
           <tr className="font-semibold"><td>= Lucro bruto</td><td className="text-right">{money(d.dre.lucro_bruto)}</td></tr>
           <tr><td>(−) Despesas pagas pelo caixa</td><td className="text-right text-rust">{money(-d.dre.despesas_caixa)}</td></tr>
+          {d.dre.maquininha_bruta > 0 && <><tr><td>(+) Vendas na maquininha (fora do RUSTEN)</td><td className="text-right">{money(d.dre.maquininha_bruta)}</td></tr>
+            <tr><td>(−) Taxas da maquininha</td><td className="text-right text-rust">{money(-d.dre.maquininha_taxas)}</td></tr></>}
           <tr className="font-display text-xl"><td>= Resultado operacional</td><td className="text-right">{money(d.dre.resultado)}</td></tr>
         </tbody></table>
         <p className="mt-2 text-xs text-muted">Taxa de serviço ({money(d.dre.taxa_servico)}) e taxa de entrega ({money(d.dre.taxa_entrega)}) ficam fora da receita de consumo. Despesas fixas (aluguel, folha) não são registradas no RUSTEN.</p></section>}
@@ -203,6 +218,7 @@ function Bases() {
       <summary className="flex cursor-pointer items-center gap-2 font-semibold"><Info size={16} /> Como os indicadores são calculados</summary>
       <ul className="mt-2 list-disc space-y-1 pl-5 text-muted">
         <li><b>Faturamento</b>: consumo (itens ativos) + taxa de serviço + taxa de entrega dos consumos encerrados no período.</li>
+        <li><b>Maquininha (fora do RUSTEN)</b>: vendas importadas do relatório da InfinitePay marcadas como feitas só na maquininha, pela data do relatório (dia corrido). Não têm CMV.</li>
         <li><b>Recebido</b>: pagamentos confirmados no período, pela data comercial do pagamento. Estornados não contam.</li>
         <li><b>Ticket médio</b>: faturamento ÷ número de consumos encerrados.</li>
         <li><b>CMV</b>: custo dos insumos baixados na venda (custo médio do momento). Itens sem baixa registrada usam o custo do produto (teórico da ficha técnica ou cadastrado) × quantidade.</li>

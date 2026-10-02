@@ -19,6 +19,7 @@ import { router as kitchenRouter } from './routes/kitchen.js';
 import { router as stockRouter } from './routes/stock.js';
 import { router as accountRouter } from './routes/account.js';
 import { router as infinitepayRouter } from './routes/infinitepay.js';
+import { router as posSalesRouter } from './routes/possales.js';
 import { router as reportsRouter } from './routes/reports.js';
 import { router as deliveryRouter } from './routes/delivery.js';
 import { router as marketingRouter } from './routes/marketing.js';
@@ -46,6 +47,8 @@ export function createApp() {
   // Corpo cru preservado para conferir assinaturas da central
   // foto da nota fiscal (até ~6 MB em base64) só nesta rota
   app.use('/api/stock/notes/read', express.json({ limit: '9mb' }));
+  // relatório de vendas da maquininha (PDF original em base64, até 5 MB)
+  app.use(['/api/pos-sales', '/api/pos-sales/preview'], express.json({ limit: '8mb' }));
   app.use(express.json({ limit: '1mb', verify: (req, _res, buf) => { req.rawBody = buf.toString('utf8'); } }));
 
   app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'rusten-api' }));
@@ -65,6 +68,7 @@ export function createApp() {
   app.use('/api/customers', ...gated, requireAccess('clientes'), customersRouter);
   app.use('/api/accounts', ...gated, requireAccess('clientes'), accountRouter);
   app.use('/api/infinitepay', ...gated, infinitepayRouter);
+  app.use('/api/pos-sales', ...gated, requireAccess('pdv'), posSalesRouter);
   app.use('/api/kitchen', ...gated, requireAccess('cozinha'), kitchenRouter);
   app.use('/api/stock', ...gated, requireAccess('estoque'), stockRouter);
   app.use('/api/reports', ...gated, requireAccess('relatorios'), reportsRouter);

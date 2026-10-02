@@ -966,6 +966,51 @@ await check('InfinitePay: link com o valor, aviso só vale conferido, pagamento 
     assert.equal(panel.totals.pix, bal); assert.equal(panel.totals.divergente, bal2);
   } finally { fake.close(); delete process.env.INFINITEPAY_API_URL; }
 });
+await check('vendas da maquininha: importa o relatório, confere, evita duplicar, substitui, entra nos relatórios e cancela', async () => {
+  const api = client((await anon('POST', '/api/auth/login', { email: 'a@teste.dev', password: 'Motocustom2026x' })).data.access_token, A.terminal);
+  const pdf = (tag) => Buffer.from(`%PDF-1.7\n% relatorio de teste ${tag}\n${'x'.repeat(200)}\n%%EOF`).toString('base64');
+  const rep = { account: '00.000.000 TESTE', generated_on: '2026-10-02', period_from: '2026-09-02', period_to: '2026-10-02', gross_cents: 536842, net_cents: 526289, fee_cents: 10553, tx_count: 108,
+    days: [{ day: '2026-09-18', gross_cents: 422908, net_cents: 414827, tx_count: 96 }, { day: '2026-09-19', gross_cents: 5200, net_cents: 5066, tx_count: 1 }, { day: '2026-09-23', gross_cents: 108734, net_cents: 106396, tx_count: 11 }],
+    methods: [{ label: 'Débito', gross_cents: 268168 }, { label: 'Crédito', gross_cents: 205417 }, { label: 'Pix', gross_cents: 55563 }, { label: 'Money', gross_cents: 7694 }],
+    products: [{ name: 'CHOPP LAGER 400 ml', qty: 17 }], categories: [{ name: 'CHOPP e CERVEJA', qty: 65 }], notes: ['ranking parcial'] };
+  // números que não fecham são recusados
+  const broken = { ...rep, days: rep.days.map((d, i) => (i ? d : { ...d, gross_cents: d.gross_cents + 1000 })) };
+  assert.equal((await api('POST', '/api/pos-sales', { file_name: 'r.pdf', file_b64: pdf('a'), mode: 'externa', report: broken })).status, 400);
+  assert.equal((await api('POST', '/api/pos-sales', { file_name: 'r.txt', file_b64: Buffer.from('nao e pdf'.repeat(20)).toString('base64'), mode: 'externa', report: rep })).status, 400);
+  const pv = await api('POST', '/api/pos-sales/preview', { file_name: 'r.pdf', file_b64: pdf('a'), report: rep });
+  assert.equal(pv.status, 200, JSON.stringify(pv.data)); assert.deepEqual(pv.data.problems, []); assert.equal(pv.data.reconciliation.length, 3);
+  const imp = await api('POST', '/api/pos-sales', { file_name: 'relatorio_vendas.pdf', file_b64: pdf('a'), mode: 'externa', report: rep });
+  assert.equal(imp.status, 201, JSON.stringify(imp.data));
+  // o mesmo arquivo não entra de novo; outro arquivo com os mesmos dias exige substituição
+  assert.equal((await api('POST', '/api/pos-sales', { file_name: 'relatorio_vendas.pdf', file_b64: pdf('a'), mode: 'externa', report: rep })).data.code, 'duplicate');
+  const ov = await api('POST', '/api/pos-sales', { file_name: 'novo.pdf', file_b64: pdf('b'), mode: 'externa', report: rep });
+  assert.equal(ov.status, 409); assert.equal(ov.data.code, 'overlap');
+  // valores importados não mudam pelo banco
+  await assert.rejects(pool.query('update pos_sales_imports set gross_cents = 1 where id = $1', [imp.data.id]));
+  const rp = (await api('GET', '/api/reports/overview?from=2026-09-01&to=2026-09-30')).data;
+  assert.equal(rp.external.gross_cents, 536842); assert.equal(rp.external.fee_cents, 10553); assert.equal(rp.external.tx_count, 108);
+  assert.equal(rp.summary.revenue_total_cents, rp.summary.revenue_cents + 536842);
+  assert.equal(rp.external.methods_exact, false); // relatório vai até 02/10: formas proporcionais
+  assert.equal(rp.external.by_method.find((m) => m.method === 'dinheiro').total, 7694);
+  const part = (await api('GET', '/api/reports/overview?from=2026-09-19&to=2026-09-19')).data.external;
+  assert.equal(part.gross_cents, 5200); assert.equal(part.tx_count, 1);
+  // substituição: a anterior é cancelada com motivo e os dias passam para a nova
+  const rep2 = await api('POST', '/api/pos-sales', { file_name: 'novo.pdf', file_b64: pdf('b'), mode: 'conferencia', replace: true, report: rep });
+  assert.equal(rep2.status, 201, JSON.stringify(rep2.data)); assert.deepEqual(rep2.data.replaced, [imp.data.id]);
+  const list = (await api('GET', '/api/pos-sales')).data;
+  assert.equal(list.items.find((i) => i.id === imp.data.id).status, 'cancelado');
+  assert.equal(list.totals.gross_cents, 0); // "só conferência" não soma ao faturamento
+  assert.equal((await api('GET', '/api/reports/overview?from=2026-09-01&to=2026-09-30')).data.external, null);
+  const det = (await api('GET', `/api/pos-sales/${rep2.data.id}`)).data;
+  assert.equal(det.days.length, 3); assert.equal(det.methods[3].method, 'dinheiro'); assert.equal(det.reconciliation.length, 3);
+  // outra empresa não vê nem cancela
+  assert.equal((await apiC('GET', `/api/pos-sales/${rep2.data.id}`)).status, 404);
+  assert.equal((await apiC('POST', `/api/pos-sales/${rep2.data.id}/cancel`, { reason: 'tentativa indevida' })).status, 404);
+  assert.equal((await api('POST', `/api/pos-sales/${rep2.data.id}/cancel`, { reason: 'x' })).status, 400);
+  assert.equal((await api('POST', `/api/pos-sales/${rep2.data.id}/cancel`, { reason: 'relatório errado' })).status, 200);
+  const again = await api('POST', '/api/pos-sales', { file_name: 'relatorio_vendas.pdf', file_b64: pdf('a'), mode: 'externa', report: rep });
+  assert.equal(again.status, 201, JSON.stringify(again.data)); // depois de cancelar, pode importar de novo
+});
 await check('remoção da demonstração preserva produtos já vendidos', async () => {
   const login = await anon('POST', '/api/auth/login', { email: 'a@teste.dev', password: 'Motocustom2026x' });
   const a2 = client(login.data.access_token, A.terminal);

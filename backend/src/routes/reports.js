@@ -5,6 +5,7 @@
    - Ticket médio = faturamento ÷ consumos encerrados.
    - CMV = custo dos insumos baixados na venda (custo médio do momento); sem baixa registrada, custo cadastrado/teórico × quantidade.
    - Margem = (consumo − CMV) ÷ consumo.
+   - Vendas na maquininha = importadas do relatório da InfinitePay marcadas como "fora do RUSTEN" (data do relatório, dia corrido).
    Valores financeiros só para "financeiro.visualizar"; CMV/margem só para "relatorios.cmv" — também nas exportações. */
 import { Router } from 'express';
 import { z } from 'zod';
@@ -91,6 +92,25 @@ async function build(ctx, r) {
   const movements = fin ? (await q(`select m.kind, coalesce(sum(m.amount_cents),0)::bigint as total from cash_movements m join cash_sessions c on c.id = m.cash_session_id
       where m.company_id = $1 and c.business_date between $2 and $3 group by m.kind`, [ctx.companyId, r.from, r.to])).rows : null;
 
+  // vendas feitas direto na maquininha (importadas do relatório da InfinitePay; só as marcadas como fora do RUSTEN)
+  const extDays = fin ? (await q(`select d.day, d.import_id, d.gross_cents, d.net_cents, d.tx_count from pos_sales_days d join pos_sales_imports i on i.id = d.import_id
+      where d.company_id = $1 and d.active and i.mode = 'externa' and d.day between $2 and $3 order by d.day`, [ctx.companyId, r.from, r.to])).rows : [];
+  let external = null;
+  if (fin && extDays.length) {
+    const imps = (await q('select id, period_from, period_to, gross_cents, methods from pos_sales_imports where id = any($1::bigint[])', [[...new Set(extDays.map((d) => d.import_id))]])).rows;
+    const byMethod = {};
+    let exact = true;
+    for (const i of imps) {
+      const part = extDays.filter((d) => d.import_id === i.id).reduce((a, d) => a + Number(d.gross_cents), 0);
+      if (i.period_from < r.from || i.period_to > r.to) exact = false; // relatório maior que o período: formas proporcionais
+      const f = i.gross_cents ? part / i.gross_cents : 0;
+      for (const m of i.methods) byMethod[m.method] = (byMethod[m.method] || 0) + Math.round(m.gross_cents * f);
+    }
+    const tot = (k) => extDays.reduce((a, d) => a + Number(d[k]), 0);
+    external = { gross_cents: tot('gross_cents'), net_cents: tot('net_cents'), fee_cents: tot('gross_cents') - tot('net_cents'), tx_count: tot('tx_count'),
+      by_day: extDays.map(({ day, gross_cents, net_cents, tx_count }) => ({ day, gross_cents, net_cents, tx_count })),
+      by_method: Object.entries(byMethod).map(([method, total]) => ({ method, total })).sort((a, b) => b.total - a.total), methods_exact: exact, imports: imps.length };
+  }
   const cogs = byProduct.reduce((s, p) => s + Number(p.cost_cents), 0);
   const money = (v) => (fin ? v : null);
   if (!cmv) for (const p of [...byProduct, ...byCategory]) delete p.cost_cents;
@@ -99,12 +119,14 @@ async function build(ctx, r) {
   const dre = fin && cmv ? {
     receita_bruta: revenue, taxa_servico: Number(sum.service_fee_cents), taxa_entrega: Number(sum.delivery_fee_cents), cmv: cogs,
     lucro_bruto: Number(sum.items_cents) - cogs, despesas_caixa: Number(movements?.find((m) => m.kind === 'despesa')?.total || 0),
-    resultado: Number(sum.items_cents) - cogs - Number(movements?.find((m) => m.kind === 'despesa')?.total || 0),
+    maquininha_bruta: external?.gross_cents || 0, maquininha_taxas: external?.fee_cents || 0,
+    resultado: Number(sum.items_cents) - cogs - Number(movements?.find((m) => m.kind === 'despesa')?.total || 0) + (external?.net_cents || 0),
   } : null;
   return {
     period: { from: r.from, to: r.to }, permissions: { financial: fin, cmv },
     summary: { sessions: sum.sessions, revenue_cents: money(revenue), items_cents: money(Number(sum.items_cents)), service_fee_cents: money(Number(sum.service_fee_cents)),
       delivery_fee_cents: money(Number(sum.delivery_fee_cents)), received_cents: money(received), ticket_cents: money(sum.sessions ? Math.round(revenue / sum.sessions) : 0),
+      external_cents: fin ? (external?.gross_cents || 0) : null, revenue_total_cents: fin ? revenue + (external?.gross_cents || 0) : null,
       open_sessions: open.n, open_balance_cents: money(Number(open.balance)),
       cmv_cents: cmv ? cogs : null, margin_pct: cmv && Number(sum.items_cents) ? Math.round(((Number(sum.items_cents) - cogs) / Number(sum.items_cents)) * 1000) / 10 : null },
     by_day: byDay.map((d) => ({ ...d, items_cents: money(Number(d.items_cents)) })),
@@ -115,7 +137,7 @@ async function build(ctx, r) {
     by_table: byTable.map((d) => ({ ...d, items_cents: money(Number(d.items_cents)) })),
     by_channel: byChannel.map((d) => ({ ...d, items_cents: money(Number(d.items_cents)) })),
     by_terminal: byTerminal.map((d) => ({ ...d, items_cents: money(Number(d.items_cents)) })),
-    payments: fin ? payments : null, cash, movements, dre,
+    payments: fin ? payments : null, cash, movements, dre, external,
     control: { ...control, canceled_cents: money(Number(control.canceled_cents)), discounts_cents: money(Number(control.discounts_cents)),
       launch_modes: Object.fromEntries(modes.map((m) => [m.launch_mode, m.n])), events: Object.fromEntries(auditCounts.map((a) => [a.action, a.n])) },
     kitchen, delivery, stock: cmv ? stock : null, customers: { ...customers, loyalty, reviews },

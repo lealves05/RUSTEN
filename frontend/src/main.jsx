@@ -32,6 +32,7 @@ const PublicMenu = lazy(() => PublicPages.then((m) => ({ default: m.PublicMenu }
 const PublicOrder = lazy(() => PublicPages.then((m) => ({ default: m.PublicOrder })));
 const PublicReview = lazy(() => PublicPages.then((m) => ({ default: m.PublicReview })));
 const Unsubscribe = lazy(() => PublicPages.then((m) => ({ default: m.Unsubscribe })));
+const PosSales = lazy(() => import('./pages/PosSales.jsx'));
 const InfinitePayPage = lazy(() => import('./components/InfinitePay.jsx').then((m) => ({ default: m.InfinitePayPanel })));
 const PaymentReturn = lazy(() => PublicPages.then((m) => ({ default: m.PaymentReturn })));
 const L = (el) => <Suspense fallback={<Loading />}>{el}</Suspense>;
@@ -67,6 +68,7 @@ function App() {
         <Route path="cardapio" element={<Suspense fallback={<Loading />}><Menu /></Suspense>} />
         <Route path="financeiro/caixa" element={<Suspense fallback={<Loading />}><Cash /></Suspense>} />
         <Route path="financeiro/infinitepay" element={L(<InfinitePayPage />)} />
+        <Route path="financeiro/maquininha" element={L(<PosSales />)} />
         <Route path="configuracoes/*" element={<Suspense fallback={<Loading />}><Settings /></Suspense>} />
         <Route path="suporte" element={<Suspense fallback={<Loading />}><Support /></Suspense>} />
         <Route path="clientes" element={L(<Customers />)} />

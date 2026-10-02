@@ -97,7 +97,7 @@ export function InfinitePaySettings() {
       </Field>
       <button className="btn-primary" onClick={save}>Salvar</button>
       <div className="rounded-lg bg-raised p-3 text-xs text-muted">
-        <p><b>O que a InfinitePay libera para sistemas:</b> criar o link de pagamento, avisar quando é pago e consultar o pagamento. As vendas feitas direto na maquininha ou no Tap não passam pelo RUSTEN: registre-as no Receber como Débito, Crédito ou Pix.</p>
+        <p><b>O que a InfinitePay libera para sistemas:</b> criar o link de pagamento, avisar quando é pago e consultar o pagamento. As vendas feitas direto na maquininha ou no Tap não passam pelo RUSTEN: registre-as no Receber como Débito, Crédito ou Pix, ou importe o relatório de vendas em <a className="underline" href="/financeiro/maquininha">Financeiro › Vendas da maquininha</a>.</p>
         <p className="mt-1">Taxas e repasses seguem o seu plano na InfinitePay; o RUSTEN registra o valor da comanda.</p>
       </div>
     </div>

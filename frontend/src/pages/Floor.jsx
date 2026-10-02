@@ -147,8 +147,9 @@ function Cards({ s }) {
     const esc = (x) => String(x ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
     w.document.write(`<!doctype html><meta charset="utf-8"><title>Comandas</title><style>body{font-family:sans-serif}table{border-collapse:collapse;width:100%}td,th{border:1px solid #999;padding:4px 8px;text-align:left}</style>
       <h2>Relação de cartões de comanda</h2><p>Imprima os códigos em etiquetas Code 128 ou QR Code com o conteúdo exato da coluna "Código".</p><table><tr><th>Número</th><th>Código</th><th>Situação</th><th>Cliente</th></tr>
-      ${cards.map((c) => `<tr><td>${c.number}</td><td style="font-family:monospace">${esc(c.code)}</td><td>${c.status}</td><td>${esc(c.customer_name || '')}</td></tr>`).join('')}</table><script>print()</script>`);
+      ${cards.map((c) => `<tr><td>${c.number}</td><td style="font-family:monospace">${esc(c.code)}</td><td>${c.status}</td><td>${esc(c.customer_name || '')}</td></tr>`).join('')}</table>`);
     w.document.close();
+    setTimeout(() => { w.focus(); w.print(); }, 250); // impressão disparada daqui: a CSP não permite script embutido na janela
   };
   const situation = (c) => (c.status === 'bloqueado' ? <Badge tone="bad" icon={Lock}>Bloqueada{c.block_reason ? ` — ${c.block_reason}` : ''}</Badge>
     : c.session_id ? <Badge tone={c.session_status === 'em_fechamento' ? 'warn' : 'info'}>{c.session_status === 'em_fechamento' ? 'Conta pedida' : 'Em uso'}</Badge> : <Badge tone="ok">Livre</Badge>);

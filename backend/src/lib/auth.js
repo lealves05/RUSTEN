@@ -12,6 +12,15 @@ const isProd = env.NODE_ENV === 'production';
 const rootSecret = env.JWT_SECRET || env.SUPABASE_SERVICE_ROLE_KEY
   || (isProd ? null : 'dev-only-rusten-secret-not-for-production');
 if (!rootSecret) throw new Error('JWT_SECRET é obrigatório em produção');
+// F01/F03: em produção, chave curta, de exemplo ou repetitiva impede o início (o valor nunca vai para o log)
+export function secretProblem(s) {
+  if (!s) return 'ausente';
+  if (['changeme', 'secret', 'jwt_secret', 'dev-only-rusten-secret-not-for-production'].includes(s)) return 'valor de exemplo';
+  if (Buffer.byteLength(s, 'utf8') < 32) return 'curta (mínimo de 32 bytes aleatórios)';
+  if (new Set(s).size < 10) return 'pouca variação de caracteres';
+  return null;
+}
+if (isProd && secretProblem(rootSecret)) throw new Error(`JWT_SECRET inseguro (${secretProblem(rootSecret)}) — o servidor não inicia em produção.`);
 
 // Chaves derivadas por finalidade (HKDF): vazamento de uma não compromete as outras
 export const deriveKey = (purpose) =>

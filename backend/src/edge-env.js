@@ -5,5 +5,6 @@ globalThis.__RUSTEN_ENV_DEFAULTS__ = {
   DB_SCHEMA: 'rusten',          // tabelas do RUSTEN ficam no esquema próprio
   DB_POOL_MAX: '3',
   PATH_PREFIX: '/rusten-api',   // a Supabase entrega o caminho com o nome da função
-  CORS_ORIGINS: '*',            // token no cabeçalho, sem cookies
+  // F06: só o site oficial (origem exata). Outros domínios: secret CORS_ORIGINS na Edge Function, separados por vírgula
+  CORS_ORIGINS: 'https://rusten.vercel.app',
 };

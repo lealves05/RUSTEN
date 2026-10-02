@@ -18,8 +18,9 @@ export default function ReviewLinkModal({ sessionId, onClose }) {
   const print = () => {
     const w = window.open('', '_blank', 'width=320,height=480'); if (!w) return;
     w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Avalie</title><style>body{font-family:monospace;text-align:center;margin:12px}</style></head><body>
-      <b>Como foi sua experiência?</b><br><img src="${d.qr}" width="200"><br><small>Aponte a câmera para avaliar</small><script>window.print()</script></body></html>`);
+      <b>Como foi sua experiência?</b><br><img src="${d.qr}" width="200"><br><small>Aponte a câmera para avaliar</small></body></html>`);
     w.document.close();
+    setTimeout(() => { w.focus(); w.print(); }, 250); // impressão disparada daqui: a CSP não permite script embutido na janela
   };
   return (
     <Modal open onClose={onClose} title="Avaliação do cliente" footer={<><button className="btn-ghost" onClick={print}><Printer size={16} /> Imprimir QR</button><button className="btn-primary" onClick={onClose}>Concluir</button></>}>

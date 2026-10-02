@@ -34,11 +34,15 @@ export function createApp() {
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
   app.use(helmet());
-  // Autenticação por token no cabeçalho (sem cookies). CORS_ORIGINS='*' libera qualquer origem HTTPS.
-  const origins = (env.CORS_ORIGINS || 'http://localhost:5173').split(',').map((s) => s.trim()).filter(Boolean);
-  const allowed = (o) => !o || origins.includes(o) || (origins.includes('*') && /^https:\/\//.test(o));
-  app.use(cors({ origin: (o, cb) => cb(null, allowed(o)), credentials: false,
+  // F06: CORS por origem exata. Produção: só CORS_ORIGINS (sem curinga, sem localhost). Desenvolvimento: localhost também.
+  // Sem Origin (webhooks, central, cron — servidor a servidor) segue para a autorização própria de cada rota.
+  const prod = env.NODE_ENV === 'production';
+  const origins = (env.CORS_ORIGINS || (prod ? '' : 'http://localhost:5173')).split(',').map((s) => s.trim()).filter((s) => s && (!prod || s !== '*'));
+  const allowed = (o) => !o || origins.includes(o) || (!prod && (origins.includes('*') || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(o)));
+  app.use(cors({ origin: (o, cb) => cb(null, allowed(o)), credentials: false, maxAge: 600,
     allowedHeaders: ['content-type', 'authorization', 'x-terminal-id'] }));
+  // F11: respostas da API não ficam em cache (dados pessoais, financeiros e tokens)
+  app.use('/api', (_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
   // Corpo cru preservado para conferir assinaturas da central
   // foto da nota fiscal (até ~6 MB em base64) só nesta rota
   app.use('/api/stock/notes/read', express.json({ limit: '9mb' }));

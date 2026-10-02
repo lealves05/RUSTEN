@@ -328,7 +328,8 @@ export function printPrecheck(session, companyName, tz) {
     <tr><td><b>Total</b></td><td style="text-align:right"><b>${esc(money(t.total))}</b></td></tr>
     <tr><td>Pago</td><td style="text-align:right">${esc(money(t.paid))}</td></tr>
     <tr><td><b>A pagar</b></td><td style="text-align:right"><b>${esc(money(t.balance))}</b></td></tr></table>
-    <div class="b"></div><div>Documento sem valor fiscal.</div><script>window.print()</script></body></html>`);
+    <div class="b"></div><div>Documento sem valor fiscal.</div></body></html>`);
   w.document.close();
+    setTimeout(() => { w.focus(); w.print(); }, 250); // impressão disparada daqui: a CSP não permite script embutido na janela
   return true;
 }

@@ -5,7 +5,7 @@ import './index.css';
 import { SessionProvider, useSession } from './lib/session.jsx';
 import { Loading, ToastProvider } from './components/ui.jsx';
 import Layout from './components/Layout.jsx';
-import Login from './pages/Login.jsx';
+import Login, { ForgotPassword, ResetPassword } from './pages/Login.jsx';
 import Register from './pages/Register.jsx';
 import Blocked from './pages/Blocked.jsx';
 
@@ -52,6 +52,8 @@ function App() {
       <Route path="/sair/:token" element={L(<Unsubscribe />)} />
       <Route path="/entrar" element={s.me ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/cadastro" element={s.me ? <Navigate to="/" replace /> : <Register />} />
+      <Route path="/esqueci-senha" element={<ForgotPassword />} />
+      <Route path="/redefinir-senha" element={<ResetPassword />} />
       <Route path="/assinatura" element={s.loading ? <Loading /> : !s.me ? <Navigate to="/entrar" replace />
         : <Suspense fallback={<Loading />}><Subscription standalone /></Suspense>} />
       <Route path="/painel-tv" element={<Guard>{L(<TvBoard />)}</Guard>} />

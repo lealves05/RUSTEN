@@ -36,6 +36,8 @@ const hubServer = http.createServer((req, res) => {
     if (req.method === 'GET' && (m = route.match(/^\/tenants\/([^/]+)\/billing$/))) {
       return send(200, { access: hub.tenants.get(m[1]), subscription: null, payments: [], pending_payment: null, plans: [], gateway_configured: false });
     }
+    if (req.method === 'GET' && route === '/mail/status') return send(200, { available: true });
+    if (req.method === 'POST' && route === '/mail/password-reset') { (hub.mails ||= []).push(JSON.parse(body)); return send(200, { ok: true }); }
     send(404, { error: 'rota desconhecida' });
   });
 });
@@ -893,6 +895,23 @@ await check('conta do cliente: fiado com limite, crédito antecipado, caixa e es
   assert.equal(open1.credit_cents, 500);
   const ev = (await pool.query(`select action from audit_events where company_id = $1 and action in ('pagamento.fiado','cliente.fiado_recebido','cliente.credito_lancado','cliente.limite_fiado')`, [C.me.company.id])).rows.map((r) => r.action);
   for (const a of ['pagamento.fiado', 'cliente.fiado_recebido', 'cliente.credito_lancado', 'cliente.limite_fiado']) assert.ok(ev.includes(a), a);
+});
+await check('esqueci minha senha: link pela central, uso único, encerra sessões', async () => {
+  const before = (hub.mails || []).length;
+  assert.equal((await anon('GET', '/api/auth/reset-options')).data.available, true);
+  // e-mail desconhecido: mesma resposta, nenhum envio
+  const g = await anon('POST', '/api/auth/forgot', { email: 'ninguem@teste.dev' });
+  assert.equal(g.status, 200); assert.equal((hub.mails || []).length, before);
+  const r = await anon('POST', '/api/auth/forgot', { email: 'cx@teste.dev' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const mail = hub.mails.at(-1);
+  assert.equal(mail.to, 'cx@teste.dev'); assert.match(mail.path, /^\/redefinir-senha\?token=/);
+  const token = new URL(`http://x${mail.path}`).searchParams.get('token');
+  assert.equal((await anon('POST', '/api/auth/reset', { token, new_password: 'curta' })).status, 400);
+  assert.equal((await anon('POST', '/api/auth/reset', { token, new_password: 'NovaSenha2026xyz' })).status, 200);
+  assert.equal((await anon('POST', '/api/auth/reset', { token, new_password: 'OutraSenha2026xyz' })).data.code, 'reset_invalid');
+  assert.equal((await anon('POST', '/api/auth/login', { email: 'cx@teste.dev', password: 'Caixa2026xyzw' })).status, 401);
+  assert.equal((await anon('POST', '/api/auth/login', { email: 'cx@teste.dev', password: 'NovaSenha2026xyz' })).status, 200);
 });
 await check('remoção da demonstração preserva produtos já vendidos', async () => {
   const login = await anon('POST', '/api/auth/login', { email: 'a@teste.dev', password: 'Motocustom2026x' });

@@ -226,6 +226,58 @@ router.post('/login', h(async (req, res) => {
   res.json(await startSession(u, req));
 }));
 
+// ---- Esqueci minha senha: link de uso único (60 min) enviado pela central, com o remetente da plataforma ----
+const RESET_MIN = 60;
+const GENERIC_FORGOT = { ok: true, message: 'Se o e-mail estiver cadastrado, você vai receber um link para criar uma nova senha em alguns minutos.' };
+let mailCache = { at: 0, v: false };
+async function resetAvailable() {
+  if (Date.now() - mailCache.at < 60000) return mailCache.v;
+  let v = false;
+  try { v = !!(await hubCall('GET', '/mail/status', undefined, 5000)).available; } catch { v = false; }
+  mailCache = { at: Date.now(), v };
+  return v;
+}
+router.get('/reset-options', h(async (_req, res) => res.json({ available: await resetAvailable() })));
+
+router.post('/forgot', h(async (req, res) => {
+  const b = parse(z.object({ email: z.string().trim().toLowerCase().email('E-mail inválido').max(160) }), req.body);
+  await rateLimit(`forgot:${req.ip}`, 20, 3600);
+  if (!(await resetAvailable())) throw new HttpError(503, 'A recuperação de senha por e-mail ainda não está ativa. Peça ao proprietário ou administrador da empresa para definir uma nova senha em Configurações › Usuários, ou fale com o suporte.', 'reset_unavailable');
+  try { await rateLimit(`forgot-user:${b.email}`, 3, 3600); } catch { return res.json(GENERIC_FORGOT); }
+  const u = (await q(`select u.id, u.name, u.email, u.company_id, c.name as company_name, c.is_demo from users u join companies c on c.id = u.company_id
+     where lower(u.email) = $1 and u.active`, [b.email])).rows[0];
+  if (!u || u.is_demo) return res.json(GENERIC_FORGOT);
+  const token = randomToken(32);
+  await q('update password_resets set used_at = now() where user_id = $1 and used_at is null', [u.id]);
+  await q(`insert into password_resets (user_id, token_hash, expires_at, ip) values ($1,$2, now() + make_interval(mins => $3), $4)`,
+    [u.id, sha256(token), RESET_MIN, String(req.ip || '').slice(0, 64)]);
+  try {
+    await hubCall('POST', '/mail/password-reset', { to: u.email, name: u.name, company: u.company_name, path: `/redefinir-senha?token=${token}`, minutes: RESET_MIN }, 20000);
+  } catch (e) {
+    await q('update password_resets set used_at = now() where token_hash = $1', [sha256(token)]);
+    throw new HttpError(e.status === 429 ? 429 : 502, e.status === 429 ? e.message : 'Não foi possível enviar o e-mail agora. Tente novamente em alguns minutos.', 'mail_failed');
+  }
+  await audit({ query: q }, { companyId: u.company_id, userId: u.id }, 'senha.redefinicao_pedida', { entity: 'user', entityId: u.id });
+  res.json(GENERIC_FORGOT);
+}));
+
+router.post('/reset', h(async (req, res) => {
+  const b = parse(z.object({ token: z.string().trim().min(20).max(200), new_password: z.string().max(200) }), req.body);
+  await rateLimit(`reset:${req.ip}`, 30, 3600);
+  checkPassword(b.new_password);
+  const out = await tx(async (db) => {
+    const r = (await db.query(`update password_resets set used_at = now() where token_hash = $1 and used_at is null and expires_at > now() returning user_id`, [sha256(b.token)])).rows[0];
+    if (!r) throw new HttpError(400, 'Este link expirou ou já foi usado. Peça um novo em “Esqueci minha senha”.', 'reset_invalid');
+    const u = (await db.query('select id, company_id from users where id = $1 and active', [r.user_id])).rows[0];
+    if (!u) throw new HttpError(400, 'Conta indisponível.', 'reset_invalid');
+    await db.query(`update users set password_hash = $2, password_changed_at = now(), failed_attempts = 0, locked_until = null where id = $1`, [u.id, await bcrypt.hash(b.new_password, 10)]);
+    await db.query('update user_sessions set revoked_at = now() where user_id = $1 and revoked_at is null', [u.id]);
+    await audit(db, { companyId: u.company_id, userId: u.id }, 'senha.redefinida_por_email', { entity: 'user', entityId: u.id });
+    return { ok: true };
+  });
+  res.json(out);
+}));
+
 router.post('/refresh', h(async (req, res) => {
   const raw = String(req.body?.refresh_token || '');
   const [sid, secret] = raw.split('.');

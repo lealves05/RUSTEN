@@ -2233,20 +2233,20 @@ tatus, to_status, user_id) values ($1,$2,$3,$4,$5)",[e.ctx.companyId,i.id,i.kitc
 "cozinha.operar"),l(async(e,a)=>{let t=w(ee.object({to:ee.enum(["aceito","preparando","pronto","entregue"]),sector_id:ee.number().int().optional()}),e.body),n=tn.indexOf(t.to),o=await v(
 async i=>{let s=[Number(e.params.id),e.ctx.companyId,tn.slice(0,n)],r="";t.sector_id&&(s.push(t.sector_id),r=` and sector_id = $${s.length}`);let c=(await i.query(`select id, kitch\
 en_status from order_items where session_id = $1 and company_id = $2 and status = 'ativo'
-      and sent_at is not null and kitchen_status = any($3)${r} for update`,s)).rows;for(let m of c)await i.query(`update order_items set kitchen_status = $2, accepted_at = coalesce\
-(accepted_at, now()),
+      and sent_at is not null and kitchen_status = any($3)${r} order by id for update`,s)).rows;for(let m of c)await i.query(`update order_items set kitchen_status = $2, accepted_a\
+t = coalesce(accepted_at, now()),
           ready_at = coalesce(ready_at, case when $2 in ('pronto','entregue') then now() end),
           delivered_at = case when $2 = 'entregue' then now() else delivered_at end where id = $1`,[m.id,t.to]),await i.query("insert into kitchen_events (company_id, item_id, from\
 _status, to_status, user_id) values ($1,$2,$3,$4,$5)",[e.ctx.companyId,m.id,m.kitchen_status,t.to,e.ctx.userId]);return{changed:c.length}});a.json(o)}));le.post("/items/refuse",y("\
 cozinha.operar"),l(async(e,a)=>{let t=w(ee.object({item_ids:ee.array(ee.number().int()).min(1).max(400),reason:ee.string().trim().max(200).optional()}),e.body),n=await v(async o=>{
 let i=(await o.query(`select id, session_id, description, qty, kitchen_status from order_items where company_id = $1 and id = any($2)
-      and status = 'ativo' and sent_at is not null and kitchen_status in ('novo','aceito','preparando','pronto') for update`,[e.ctx.companyId,t.item_ids])).rows;for(let s of i)await o.
-query("update order_items set kitchen_status = 'nao_produz' where id = $1",[s.id]),await o.query("insert into kitchen_events (company_id, item_id, from_status, to_status, user_id) \
-values ($1,$2,$3,'recusado',$4)",[e.ctx.companyId,s.id,s.kitchen_status,e.ctx.userId]);return i.length&&await h(o,e.ctx,"producao.recusado",{entity:"session",entityId:i[0].session_id,
-reason:t.reason||null,data:{itens:i.map(s=>({id:s.id,item:`${Number(s.qty)}\xD7 ${s.description}`,etapa:s.kitchen_status}))}}),{refused:i.length}});a.json(n)}));le.post("/items/:id\
-/ack-cancel",y("cozinha.operar"),l(async(e,a)=>{let t=await d("update order_items set cancel_ack_at = now() where id = $1 and company_id = $2 and kitchen_status = 'cancelado' and c\
-ancel_ack_at is null returning id",[Number(e.params.id),e.ctx.companyId]);t.rows[0]&&await d("insert into kitchen_events (company_id, item_id, from_status, to_status, user_id) valu\
-es ($1,$2,$3,$4,$5)",[e.ctx.companyId,t.rows[0].id,"cancelado","cancelado_ciente",e.ctx.userId]),a.json({ok:!0})}));le.post("/items/:id/priority",y("cozinha.operar"),l(async(e,a)=>{
+      and status = 'ativo' and sent_at is not null and kitchen_status in ('novo','aceito','preparando','pronto') order by id for update`,[e.ctx.companyId,t.item_ids])).rows;for(let s of i)
+await o.query("update order_items set kitchen_status = 'nao_produz' where id = $1",[s.id]),await o.query("insert into kitchen_events (company_id, item_id, from_status, to_status, u\
+ser_id) values ($1,$2,$3,'recusado',$4)",[e.ctx.companyId,s.id,s.kitchen_status,e.ctx.userId]);return i.length&&await h(o,e.ctx,"producao.recusado",{entity:"session",entityId:i[0].
+session_id,reason:t.reason||null,data:{itens:i.map(s=>({id:s.id,item:`${Number(s.qty)}\xD7 ${s.description}`,etapa:s.kitchen_status}))}}),{refused:i.length}});a.json(n)}));le.post(
+"/items/:id/ack-cancel",y("cozinha.operar"),l(async(e,a)=>{let t=await d("update order_items set cancel_ack_at = now() where id = $1 and company_id = $2 and kitchen_status = 'cance\
+lado' and cancel_ack_at is null returning id",[Number(e.params.id),e.ctx.companyId]);t.rows[0]&&await d("insert into kitchen_events (company_id, item_id, from_status, to_status, us\
+er_id) values ($1,$2,$3,$4,$5)",[e.ctx.companyId,t.rows[0].id,"cancelado","cancelado_ciente",e.ctx.userId]),a.json({ok:!0})}));le.post("/items/:id/priority",y("cozinha.operar"),l(async(e,a)=>{
 let t=w(ee.object({priority:ee.boolean(),reason:ee.string().trim().min(3).max(200)}),e.body);V(e.ctx,"pdv.autorizar");let n=await d("update order_items set priority = $3 where id =\
  $1 and company_id = $2 returning id, session_id",[Number(e.params.id),e.ctx.companyId,t.priority]);if(!n.rows[0])throw x();await h({query:d},e.ctx,"producao.prioridade",{entity:"i\
 tem",entityId:n.rows[0].id,reason:t.reason,data:{priority:t.priority}}),a.json({ok:!0})}));le.get("/ready",y("pdv.lancar"),l(async(e,a)=>{a.json((await d(`select i.id, i.descriptio\

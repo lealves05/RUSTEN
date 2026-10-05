@@ -82,7 +82,7 @@ router.post('/sessions/:id/advance', need('cozinha.operar'), h(async (req, res) 
     let extra = '';
     if (b.sector_id) { params.push(b.sector_id); extra = ` and sector_id = $${params.length}`; }
     const items = (await db.query(`select id, kitchen_status from order_items where session_id = $1 and company_id = $2 and status = 'ativo'
-      and sent_at is not null and kitchen_status = any($3)${extra} for update`, params)).rows;
+      and sent_at is not null and kitchen_status = any($3)${extra} order by id for update`, params)).rows;
     for (const it of items) {
       await db.query(`update order_items set kitchen_status = $2, accepted_at = coalesce(accepted_at, now()),
           ready_at = coalesce(ready_at, case when $2 in ('pronto','entregue') then now() end),
@@ -102,7 +102,7 @@ router.post('/items/refuse', need('cozinha.operar'), h(async (req, res) => {
   const b = parse(z.object({ item_ids: z.array(z.number().int()).min(1).max(400), reason: z.string().trim().max(200).optional() }), req.body);
   const out = await tx(async (db) => {
     const items = (await db.query(`select id, session_id, description, qty, kitchen_status from order_items where company_id = $1 and id = any($2)
-      and status = 'ativo' and sent_at is not null and kitchen_status in ('novo','aceito','preparando','pronto') for update`, [req.ctx.companyId, b.item_ids])).rows;
+      and status = 'ativo' and sent_at is not null and kitchen_status in ('novo','aceito','preparando','pronto') order by id for update`, [req.ctx.companyId, b.item_ids])).rows;
     for (const it of items) {
       await db.query("update order_items set kitchen_status = 'nao_produz' where id = $1", [it.id]);
       await db.query("insert into kitchen_events (company_id, item_id, from_status, to_status, user_id) values ($1,$2,$3,'recusado',$4)",

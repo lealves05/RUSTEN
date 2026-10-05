@@ -1,0 +1,22 @@
+// RUSTEN — site + /api na Cloudflare (a API continua na Supabase Edge Function rusten-api).
+// O pacote da API (edge/rusten-api.js) também é servido daqui para a carregadora da Edge Function.
+// Publicar: npx wrangler deploy -c cloudflare/wrangler.jsonc [--domain rusten.lorler.com.br]
+{
+  "$schema": "../frontend/node_modules/wrangler/config-schema.json",
+  "name": "rusten-web",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "directory": "../frontend/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api", "/api/*"]
+  },
+  "vars": {
+    "PRODUCT_ID": "rusten",
+    "API_UPSTREAM": "https://dwfbxrfniarhufltmlhb.supabase.co/functions/v1/rusten-api"
+  },
+  "observability": { "enabled": true }
+}

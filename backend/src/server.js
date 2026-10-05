@@ -29,11 +29,13 @@ import { router as publicRouter } from './routes/public.js';
 import { platformRouter, cronRouter, accessRouter } from './routes/platform.js';
 import { flushOutbox } from './lib/platform.js';
 import { env } from './lib/env.js';
+import { edgeProxyIp } from './edgeProxy.js';
 
 export function createApp() {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
+  app.use(edgeProxyIp); // IP real quando o site (Cloudflare) encaminha /api
   app.use(helmet());
   // F06: CORS por origem exata. Produção: só CORS_ORIGINS (sem curinga, sem localhost). Desenvolvimento: localhost também.
   // Sem Origin (webhooks, central, cron — servidor a servidor) segue para a autorização própria de cada rota.

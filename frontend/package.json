@@ -5,7 +5,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "build:cloudflare": "vite build --mode cloudflare",
+    "deploy:cloudflare": "wrangler deploy -c ../cloudflare/wrangler.jsonc"
   },
   "license": "UNLICENSED",
   "dependencies": {
@@ -25,7 +27,8 @@
     "globals": "^17.12.0",
     "postcss": "^8.5.28",
     "tailwindcss": "^3.4.19",
-    "vite": "^8.3.1"
+    "vite": "^8.3.1",
+    "wrangler": "^4.40.0"
   },
   "private": true,
   "type": "module"

@@ -58,3 +58,7 @@ Sem `PLATFORM_SECRET`/`PLATFORM_HUB_URL` o RUSTEN funciona normalmente, sem cobr
 
 `backend/src/migrations/rollback/001_base_pdv.down.sql` desfaz a migração 001 (**apaga os dados do RUSTEN** — faça `pg_dump` antes).
 Testado em clone: reverte, remove o registro e reaplica no próximo boot.
+
+## Cloudflare (lorler.com.br)
+
+Branch `cloudflare`: site + `/api` publicados na Cloudflare, com endereço próprio em `lorler.com.br`. Ver `docs/cloudflare.md` e `PUBLICAR-CLOUDFLARE.bat`.

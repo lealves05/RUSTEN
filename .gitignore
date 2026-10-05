@@ -6,3 +6,5 @@ dist/
 *.log
 .DS_Store
 !frontend/.env.production
+!frontend/.env.cloudflare
+.wrangler/

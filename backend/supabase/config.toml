@@ -1,0 +1,5 @@
+# Usado só para publicar a Edge Function do site na Cloudflare pela Supabase CLI (projeto dwfbxrfniarhufltmlhb).
+project_id = "rusten"
+
+[functions.rusten-api-cf]
+verify_jwt = false

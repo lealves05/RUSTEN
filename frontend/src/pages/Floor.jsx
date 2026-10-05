@@ -124,6 +124,13 @@ function AddTables({ open, onClose, next, onDone }) {
 
 function Cards({ s }) {
   const toast = useToast();
+  const nav = useNavigate();
+  // comanda em uso: clicar em qualquer ponto do cartão (ou da linha) abre o consumo; botões e links internos seguem com a própria ação
+  const openCard = (c) => (e) => {
+    if (!c.session_id || e.target.closest('button, a, input, select, label')) return;
+    nav(`/pdv?sessao=${c.session_id}`);
+  };
+  const openKey = (c) => (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget && c.session_id) { e.preventDefault(); nav(`/pdv?sessao=${c.session_id}`); } };
   const { data, loading, error, reload } = useLoad(() => api('/api/floor/cards'));
   const [gen, setGen] = useState(false);
   const [replace, setReplace] = useState(null);
@@ -187,7 +194,8 @@ function Cards({ s }) {
         : view === 'cartoes' ? (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
             {shown.map((c) => (
-              <div key={c.id} className={`card flex min-h-[132px] flex-col p-3 ${c.session_id ? 'stripe' : ''} ${c.status === 'bloqueado' ? 'opacity-60' : ''}`} data-card={c.number}>
+              <div key={c.id} className={`card flex min-h-[132px] flex-col p-3 ${c.session_id ? 'stripe cursor-pointer transition hover:border-copper hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-copper' : ''} ${c.status === 'bloqueado' ? 'opacity-60' : ''}`}
+                data-card={c.number} onClick={openCard(c)} onKeyDown={openKey(c)} {...(c.session_id ? { role: 'link', tabIndex: 0, 'aria-label': `Abrir comanda ${c.number}${c.customer_name ? ` de ${c.customer_name}` : ''}` } : {})}>
                 <div className="flex items-start justify-between gap-2">
                   <span className="font-display text-4xl leading-none">{c.number}</span>
                   {situation(c)}
@@ -207,7 +215,7 @@ function Cards({ s }) {
               <thead><tr><th>Nº</th><th>Cliente</th><th>Situação</th><th>Consumo</th><th>Código</th><th /></tr></thead>
               <tbody>
                 {shown.map((c) => (
-                  <tr key={c.id}>
+                  <tr key={c.id} onClick={openCard(c)} className={c.session_id ? 'cursor-pointer hover:bg-raised' : ''}>
                     <td className="font-display text-xl">{c.number}</td>
                     <td className="font-semibold">{c.customer_name || (c.session_id ? <span className="font-normal text-muted">sem nome</span> : '—')}{c.session_id && <span className="ml-2"><AccountChip cents={c.account_cents} /></span>}</td>
                     <td>{situation(c)}</td>

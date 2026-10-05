@@ -95,6 +95,26 @@ router.post('/sessions/:id/advance', need('cozinha.operar'), h(async (req, res) 
   res.json(out);
 }));
 
+// Recusar na produção: o item sai da fila do setor e do Painel da TV, mas CONTINUA na comanda (valor e cobrança não mudam).
+// Ex.: cerveja servida direto no balcão, item lançado num setor que não prepara, pedido antigo esquecido na fila.
+// Para tirar o item da conta, o caminho continua sendo o cancelamento no PDV (com motivo e autorização).
+router.post('/items/refuse', need('cozinha.operar'), h(async (req, res) => {
+  const b = parse(z.object({ item_ids: z.array(z.number().int()).min(1).max(400), reason: z.string().trim().max(200).optional() }), req.body);
+  const out = await tx(async (db) => {
+    const items = (await db.query(`select id, session_id, description, qty, kitchen_status from order_items where company_id = $1 and id = any($2)
+      and status = 'ativo' and sent_at is not null and kitchen_status in ('novo','aceito','preparando','pronto') for update`, [req.ctx.companyId, b.item_ids])).rows;
+    for (const it of items) {
+      await db.query("update order_items set kitchen_status = 'nao_produz' where id = $1", [it.id]);
+      await db.query("insert into kitchen_events (company_id, item_id, from_status, to_status, user_id) values ($1,$2,$3,'recusado',$4)",
+        [req.ctx.companyId, it.id, it.kitchen_status, req.ctx.userId]);
+    }
+    if (items.length) await audit(db, req.ctx, 'producao.recusado', { entity: 'session', entityId: items[0].session_id, reason: b.reason || null,
+      data: { itens: items.map((i) => ({ id: i.id, item: `${Number(i.qty)}× ${i.description}`, etapa: i.kitchen_status })) } });
+    return { refused: items.length };
+  });
+  res.json(out);
+}));
+
 // Cancelamento após envio: some da fila só depois que o setor confirma que viu
 router.post('/items/:id/ack-cancel', need('cozinha.operar'), h(async (req, res) => {
   const r = await q(`update order_items set cancel_ack_at = now() where id = $1 and company_id = $2 and kitchen_status = 'cancelado' and cancel_ack_at is null returning id`,

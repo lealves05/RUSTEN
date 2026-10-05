@@ -1164,6 +1164,21 @@ await check('painel da TV: separa por setor, mantém comanda paga com item a ret
   await apiC('POST', `/api/kitchen/items/${a.item.id}/status`, { to: 'pronto' });
   await apiC('POST', `/api/kitchen/items/${a.item.id}/status`, { to: 'entregue' });
 });
+await check('cozinha: recusar tira da fila e do painel da TV, mas mantém o item (e o valor) na comanda', async () => {
+  const p = bProducts.find((x) => x.sector_id && !x.groups?.length) || bProducts.find((x) => x.sector_id);
+  const s = (await apiC('POST', '/api/pdv/sessions', { kind: 'balcao', customer_name: 'Recusa Teste' })).data;
+  const it = (await apiC('POST', '/api/pdv/items', { session_id: s.id, product_id: p.id, launch_mode: 'manual', idempotency_key: key(),
+    ...(p.groups?.length ? { option_ids: [p.groups[0].options[0].id] } : {}) })).data.item;
+  const before = (await apiC('GET', `/api/pdv/sessions/${s.id}`)).data.totals.total;
+  assert.ok((await apiC('GET', '/api/kitchen/queue')).data.items.find((x) => x.id === it.id));
+  const r = await apiC('POST', '/api/kitchen/items/refuse', { item_ids: [it.id], reason: 'servido no balcão' });
+  assert.equal(r.status, 200, JSON.stringify(r.data)); assert.equal(r.data.refused, 1);
+  assert.ok(!(await apiC('GET', '/api/kitchen/queue')).data.items.find((x) => x.id === it.id));
+  assert.ok(!(await apiC('GET', '/api/kitchen/board')).data.orders.find((o) => o.id === s.id));
+  const after = (await apiC('GET', `/api/pdv/sessions/${s.id}`)).data;
+  assert.equal(after.totals.total, before); assert.ok(after.items.find((x) => x.id === it.id && x.status === 'ativo'));
+  assert.equal((await apiC('POST', '/api/kitchen/items/refuse', { item_ids: [it.id] })).data.refused, 0); // repetir não faz nada
+});
 await check('remoção da demonstração preserva produtos já vendidos', async () => {
   const login = await anon('POST', '/api/auth/login', { email: 'a@teste.dev', password: 'Motocustom2026x' });
   const a2 = client(login.data.access_token, A.terminal);

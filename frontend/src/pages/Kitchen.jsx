@@ -1,10 +1,10 @@
 // KDS — filas de produção por setor: NOVO → ACEITO → PREPARANDO → PRONTO → ENTREGUE.
 // Atualiza sozinho; ao reconectar, recarrega a fila inteira (nenhum item reconhecido volta a "novo").
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, BellRing, ChefHat, Flame, Maximize2, Megaphone, PartyPopper, Tv, Volume2, VolumeX } from 'lucide-react';
+import { AlertTriangle, Ban, BellRing, ChefHat, Flame, Maximize2, Megaphone, PartyPopper, Tv, Volume2, VolumeX } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
-import { Badge, Empty, ErrorBox, Loading, PageHeader, useToast } from '../components/ui.jsx';
+import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHeader, useToast } from '../components/ui.jsx';
 import { beep } from '../pdv/useScanner.js';
 
 const NEXT = { novo: ['aceito', 'Aceitar'], aceito: ['preparando', 'Preparar'], preparando: ['pronto', 'Pronto'], pronto: ['entregue', 'Entregue'] };
@@ -25,6 +25,8 @@ export default function Kitchen() {
   const [now, setNow] = useState(Date.now());
   const [sound, setSound] = useState(() => localStorage.getItem('rusten.kds.sound') !== 'off');
   const seen = useRef(new Set());
+  const [refusing, setRefusing] = useState(null); // { title, items }
+  const [refuseReason, setRefuseReason] = useState('');
   const first = useRef(true);
 
   useEffect(() => { api('/api/kitchen/sectors').then(setSectors).catch(setErr); }, []);
@@ -60,6 +62,14 @@ export default function Kitchen() {
   const allReady = async (g) => {
     try { await api(`/api/kitchen/sessions/${g.session_id}/advance`, { method: 'POST', body: { to: 'pronto', ...(sector ? { sector_id: Number(sector) } : {}) } }); notifyTv(); load(); }
     catch (e) { toast(e.message, 'bad'); load(); }
+  };
+  // Recusar: sai da fila e do Painel da TV, mas continua na comanda (a cobrança não muda)
+  const refuse = async () => {
+    try {
+      const r = await api('/api/kitchen/items/refuse', { method: 'POST', body: { item_ids: refusing.items.map((i) => i.id), reason: refuseReason.trim() || undefined } });
+      toast(`${r.refused} item(ns) recusado(s): saíram da fila e da TV e continuam na comanda`);
+      setRefusing(null); setRefuseReason(''); notifyTv(); load();
+    } catch (e) { toast(e.message, 'bad'); load(); }
   };
   const ack = async (item) => { await api(`/api/kitchen/items/${item.id}/ack-cancel`, { method: 'POST' }).catch(() => {}); load(); };
   const priority = async (item) => {
@@ -119,7 +129,12 @@ export default function Kitchen() {
         <div className="grid gap-3 lg:grid-cols-3">
           {COLS.map(([c, label]) => (
             <section key={c} className="min-w-0">
-              <h2 className="mb-2 flex items-center gap-2 font-display text-2xl">{label} <Badge tone={c === 'novo' ? 'warn' : c === 'pronto' ? 'ok' : 'info'}>{(columns[c] || []).reduce((n, g) => n + g.items.length, 0)}</Badge></h2>
+              <h2 className="mb-2 flex items-center gap-2 font-display text-2xl">{label} <Badge tone={c === 'novo' ? 'warn' : c === 'pronto' ? 'ok' : 'info'}>{(columns[c] || []).reduce((n, g) => n + g.items.length, 0)}</Badge>
+                {(columns[c] || []).length > 1 && (
+                  <button className="ml-auto font-sans text-xs font-semibold text-muted underline hover:text-rust" data-kds-refuse-col={c}
+                    onClick={() => setRefusing({ title: `todos os itens de "${label}"${sector ? ' deste setor' : ''}`, items: columns[c].flatMap((g) => g.items) })}>recusar todos</button>
+                )}
+              </h2>
               <div className="space-y-3">
                 {(columns[c] || []).map((g) => {
                   const target = g.items[0].target_minutes || 15;
@@ -141,6 +156,8 @@ export default function Kitchen() {
                             <PartyPopper size={16} /> Tudo pronto
                           </button>
                         )}
+                        <button className="btn-ghost min-h-[44px] px-3 text-rust" onClick={() => setRefusing({ title: `${g.origin} (${g.items.length} item(ns))`, items: g.items })}
+                          data-kds-refuse={g.session_id} title="Recusar: tira da fila e do Painel da TV, mas mantém na comanda" aria-label="Recusar pedido"><Ban size={16} /></button>
                       </div>
                       <ul className="divide-y divide-line">
                         {g.items.map((i) => (
@@ -150,7 +167,10 @@ export default function Kitchen() {
                               {!!i.modifiers?.length && <div className="text-sm">{i.modifiers.map((o) => o.name).join(' · ')}</div>}
                               {i.notes && <div className="text-sm font-semibold text-warn">Obs.: {i.notes}</div>}
                               <div className="text-[11px] uppercase text-muted">{!sector && `${i.sector_name} · `}{i.user_name || 'online'}{i.added_later && <span className="ml-1 font-bold text-copper"><BellRing size={10} className="inline" /> acréscimo</span>}</div>
-                              {s.can('pdv.autorizar') && <button className="text-[11px] underline" onClick={() => priority(i)}>{i.priority ? 'tirar prioridade' : 'priorizar'}</button>}
+                              <div className="flex gap-3">
+                                {s.can('pdv.autorizar') && <button className="text-[11px] underline" onClick={() => priority(i)}>{i.priority ? 'tirar prioridade' : 'priorizar'}</button>}
+                                <button className="text-[11px] text-rust underline" onClick={() => setRefusing({ title: `${Number(i.qty)}× ${i.description} — ${g.origin}`, items: [i] })} data-kds-refuse-item={i.id}>recusar</button>
+                              </div>
                             </div>
                             {NEXT[i.kitchen_status] && (
                               <button className={`${i.kitchen_status === 'preparando' ? 'btn-primary' : 'btn-ghost'} min-h-[48px] min-w-[96px]`} onClick={() => move(i, NEXT[i.kitchen_status][0])}>
@@ -167,6 +187,21 @@ export default function Kitchen() {
             </section>
           ))}
         </div>
+      )}
+      {refusing && (
+        <Modal open onClose={() => setRefusing(null)} title="Recusar na produção"
+          footer={<><button className="btn-ghost" onClick={() => setRefusing(null)}>Voltar</button>
+            <button className="btn-danger" onClick={refuse} data-kds-refuse-confirm><Ban size={16} /> Recusar {refusing.items.length} item(ns)</button></>}>
+          <div className="space-y-3 text-sm">
+            <p>Recusar <b>{refusing.title}</b>?</p>
+            <ul className="list-disc space-y-1 pl-5 text-muted">
+              <li>Sai da fila da produção e do <b>Painel da TV</b>.</li>
+              <li><b>Continua na comanda</b>: o valor e a cobrança não mudam. Para tirar da conta, cancele o item no PDV.</li>
+              <li>Fica registrado na auditoria, com quem recusou.</li>
+            </ul>
+            <Field label="Motivo (opcional)"><input className="input" value={refuseReason} maxLength={200} onChange={(e) => setRefuseReason(e.target.value)} placeholder="ex.: servido direto no balcão" data-kds-refuse-reason /></Field>
+          </div>
+        </Modal>
       )}
     </div>
   );

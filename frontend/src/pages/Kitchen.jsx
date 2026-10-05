@@ -46,7 +46,14 @@ export default function Kitchen() {
     catch (e) { toast(e.message, e.code === 'status_changed' ? 'warn' : 'bad'); load(); }
   };
   const call = async (g) => {
-    try { await api(`/api/kitchen/sessions/${g.session_id}/call`, { method: 'POST' }); notifyTv({ type: 'call', session_id: g.session_id }); toast(`${g.origin} chamado no Painel da TV`); }
+    // chama no painel do(s) setor(es) deste cartão (ex.: só o Bar)
+    const sectorIds = [...new Set(g.items.map((i) => i.sector_id).filter(Boolean))];
+    try {
+      const r = await api(`/api/kitchen/sessions/${g.session_id}/call`, { method: 'POST', body: sectorIds.length ? { sector_ids: sectorIds } : {} });
+      notifyTv({ type: 'call', session_id: g.session_id });
+      const names = [...new Set(g.items.filter((i) => r.sectors?.includes(i.sector_id)).map((i) => i.sector_name).filter(Boolean))];
+      toast(`${g.origin} chamado no Painel da TV${names.length ? ` (${names.join(', ')})` : ''}`);
+    }
     catch (e) { toast(e.message, 'bad'); }
   };
   // "Tudo pronto": leva todos os itens do pedido (deste setor, se filtrado) para Pronto de uma vez

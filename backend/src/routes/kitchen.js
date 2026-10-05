@@ -130,8 +130,10 @@ router.get('/stats', need('cozinha.operar'), h(async (req, res) => {
   res.json(r);
 }));
 
-/* Painel da TV (retirada): pedidos em preparo e prontos, por comanda/mesa/pedido.
-   Mostra só número, primeiro nome e itens — nada de valores. `version` muda a cada evento da cozinha. */
+/* Painel da TV (retirada): pedidos em preparo e prontos, por setor (Cozinha, Bar…) e por comanda/mesa/pedido.
+   Mostra só número, primeiro nome e itens — nada de valores. `version` muda a cada evento da cozinha.
+   Comanda já paga (encerrada) continua no painel enquanto houver item a retirar — ex.: paga no caixa e espera o drink —
+   por até 6 horas depois do fechamento. */
 router.get('/board', anyOf('pdv.lancar', 'cozinha.operar'), h(async (req, res) => {
   const unit = req.ctx.terminalUnitId || req.ctx.unitId;
   const params = [req.ctx.companyId];
@@ -139,43 +141,67 @@ router.get('/board', anyOf('pdv.lancar', 'cozinha.operar'), h(async (req, res) =
   if (unit) { params.push(unit); unitF = ` and s.unit_id = $${params.length}`; }
   const rows = (await q(`
     select s.id, s.kind, s.label, s.customer_name, c.number as card_number, t.number as table_number, d.number as delivery_number, d.mode as delivery_mode,
+           i.sector_id, ps.name as sector_name,
            count(*) filter (where i.kitchen_status in ('novo','aceito','preparando'))::int as pending,
            count(*) filter (where i.kitchen_status = 'pronto')::int as ready,
            min(i.sent_at) as sent_at, max(i.ready_at) as ready_at,
            coalesce(json_agg(json_build_object('d', i.description, 'q', i.qty, 's', i.kitchen_status) order by i.id), '[]') as items,
-           (select max(e.created_at) from kitchen_events e join order_items i2 on i2.id = e.item_id where i2.session_id = s.id and e.to_status = 'chamado') as called_at
+           (select max(e.created_at) from kitchen_events e join order_items i2 on i2.id = e.item_id
+             where i2.session_id = s.id and i2.sector_id is not distinct from i.sector_id and e.to_status = 'chamado') as called_at
       from order_items i join consumption_sessions s on s.id = i.session_id
+      left join production_sectors ps on ps.id = i.sector_id
       left join tab_cards c on c.id = s.card_id left join dining_tables t on t.id = s.table_id left join delivery_orders d on d.session_id = s.id
-     where i.company_id = $1${unitF} and i.status = 'ativo' and i.sent_at is not null and i.kitchen_status in ('novo','aceito','preparando','pronto')
-       and s.status in ('aberta','em_fechamento') and coalesce(d.status, '') not in ('saiu','entregue','cancelado')
-     group by s.id, c.number, t.number, d.number, d.mode
+     where i.company_id = $1${unitF} and i.status = 'ativo' and i.sent_at is not null and i.sent_at > now() - interval '24 hours'
+       and i.kitchen_status in ('novo','aceito','preparando','pronto')
+       and (s.status in ('aberta','em_fechamento') or (s.status = 'encerrada' and s.closed_at > now() - interval '6 hours'))
+       and coalesce(d.status, '') not in ('saiu','entregue','cancelado')
+     group by s.id, c.number, t.number, d.number, d.mode, i.sector_id, ps.name
      order by min(i.sent_at)
-     limit 120`, params)).rows;
+     limit 240`, params)).rows;
   const first = (n) => (n ? String(n).trim().split(/\s+/)[0] : null);
   const version = (await q('select coalesce(max(id),0)::bigint as id from kitchen_events where company_id = $1', [req.ctx.companyId])).rows[0].id;
-  res.set('cache-control', 'no-store');
-  res.json({ now: new Date().toISOString(), version: String(version), orders: rows.map((r) => ({
-    id: r.id,
+  const toOrder = (r) => ({
+    id: r.id, key: `${r.id}-${r.sector_id ?? 0}`,
     code: r.delivery_number ? `#${r.delivery_number}` : r.card_number ? String(r.card_number) : r.table_number ? String(r.table_number) : String(r.id),
     kind: r.delivery_number ? (r.delivery_mode === 'retirada' ? 'retirada' : 'delivery') : r.card_number ? 'comanda' : r.table_number ? 'mesa' : r.kind,
     table: r.card_number && r.table_number ? r.table_number : null,
     name: first(r.customer_name),
-    // Pronto assim que houver item pronto para retirar (mesmo que outro setor, ex.: bar, ainda esteja preparando)
+    sector_id: r.sector_id, sector: r.sector_name || 'Pedidos',
+    // pronto assim que houver item pronto para retirar neste setor
     status: r.ready > 0 ? 'pronto' : 'preparando',
     partial: r.pending > 0 && r.ready > 0,
     pending: r.pending, ready_count: r.ready,
     sent_at: r.sent_at, ready_at: r.ready_at, called_at: r.called_at,
     items: r.items.map((x) => ({ d: x.d, q: Number(x.q), ready: x.s === 'pronto' })),
-  })) });
+  });
+  // um painel por setor com demanda (na ordem em que os setores foram cadastrados)
+  const areas = [];
+  for (const r of rows) {
+    let a = areas.find((x) => x.id === (r.sector_id ?? 0));
+    if (!a) { a = { id: r.sector_id ?? 0, name: r.sector_name || 'Pedidos', orders: [] }; areas.push(a); }
+    a.orders.push(toOrder(r));
+  }
+  areas.sort((x, y) => (x.id || 1e9) - (y.id || 1e9));
+  res.set('cache-control', 'no-store');
+  res.json({ now: new Date().toISOString(), version: String(version), areas, orders: rows.map(toOrder) });
 }));
 
-// Chamar no painel da TV (destaque com fogos): qualquer pedido que esteja na produção ou pronto
+// Chamar no painel da TV (destaque com fogos): qualquer pedido que esteja na produção ou pronto.
+// Com `sector_ids`, chama no painel de cada setor (ex.: só o Bar); sem, chama em todos os setores do pedido.
 router.post('/sessions/:id/call', anyOf('pdv.lancar', 'cozinha.operar'), h(async (req, res) => {
-  const it = (await q(`select id, kitchen_status from order_items where session_id = $1 and company_id = $2 and status = 'ativo' and sent_at is not null
-      and kitchen_status in ('novo','aceito','preparando','pronto') order by (kitchen_status = 'pronto') desc, id desc limit 1`,
-    [Number(req.params.id), req.ctx.companyId])).rows[0];
-  if (!it) throw conflict('Este pedido não está mais no painel', 'nothing_to_call');
-  const ev = (await q(`insert into kitchen_events (company_id, item_id, from_status, to_status, user_id) values ($1,$2,$3,'chamado',$4) returning created_at`,
-    [req.ctx.companyId, it.id, it.kitchen_status, req.ctx.userId])).rows[0];
-  res.json({ ok: true, called_at: ev.created_at });
+  const b = parse(z.object({ sector_ids: z.array(z.number().int()).max(20).optional() }), req.body || {});
+  const its = (await q(`select distinct on (i.sector_id) i.id, i.kitchen_status, i.sector_id from order_items i join consumption_sessions s on s.id = i.session_id
+      where i.session_id = $1 and i.company_id = $2 and i.status = 'ativo' and i.sent_at is not null and i.kitchen_status in ('novo','aceito','preparando','pronto')
+        and (s.status in ('aberta','em_fechamento') or (s.status = 'encerrada' and s.closed_at > now() - interval '6 hours'))
+        ${b.sector_ids?.length ? 'and i.sector_id = any($3)' : ''}
+      order by i.sector_id, (i.kitchen_status = 'pronto') desc, i.id desc`,
+  b.sector_ids?.length ? [Number(req.params.id), req.ctx.companyId, b.sector_ids] : [Number(req.params.id), req.ctx.companyId])).rows;
+  if (!its.length) throw conflict('Este pedido não está mais no painel', 'nothing_to_call');
+  let at = null;
+  for (const it of its) {
+    const ev = (await q(`insert into kitchen_events (company_id, item_id, from_status, to_status, user_id) values ($1,$2,$3,'chamado',$4) returning created_at`,
+      [req.ctx.companyId, it.id, it.kitchen_status, req.ctx.userId])).rows[0];
+    at = ev.created_at;
+  }
+  res.json({ ok: true, called_at: at, sectors: its.map((x) => x.sector_id) });
 }));

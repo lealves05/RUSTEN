@@ -1,4 +1,5 @@
-// Painel da TV: fila de pedidos em preparo e chamada chamativa (com som e voz) quando o pedido fica pronto para retirada.
+// Painel da TV: um painel por setor com demanda (ex.: Cozinha | Bar, dividindo a tela; um só setor ocupa a tela toda),
+// com a fila em preparo, os prontos e a chamada chamativa (som e voz) quando o pedido fica pronto ou é chamado.
 // Configuração por TV (guardada neste aparelho): fundo, som, voz, tipo de letra, tempo de destaque e o que exibir.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -85,7 +86,7 @@ const label = (o) => (o.kind === 'mesa' ? 'Mesa' : o.kind === 'delivery' || o.ki
 export function speak(o, cfg) {
   if (!cfg.voice || !window.speechSynthesis) return;
   try {
-    const u = new SpeechSynthesisUtterance(`${label(o)} ${o.code.replace('#', '')}${cfg.showName && o.name ? `, ${o.name}` : ''}. Seu pedido está pronto!`);
+    const u = new SpeechSynthesisUtterance(`${label(o)} ${o.code.replace('#', '')}${cfg.showName && o.name ? `, ${o.name}` : ''}. Seu pedido está pronto!${o.__multi && o.sector ? ` Retirada: ${o.sector}.` : ''}`);
     u.lang = 'pt-BR'; u.rate = 0.95; u.volume = Math.min(1, cfg.volume + 0.2);
     const v = window.speechSynthesis.getVoices().find((x) => /pt[-_]BR/i.test(x.lang) && /female|mulher|maria|luciana|francisca/i.test(x.name))
       || window.speechSynthesis.getVoices().find((x) => /pt[-_]BR/i.test(x.lang));
@@ -119,20 +120,25 @@ export default function TvBoard() {
   }, [cfg]);
 
   // Atualização: consulta a cada 2 s e na hora quando a Cozinha avisa (mesmo navegador) ou a tela volta a ficar visível.
-  // Um pedido entra no destaque quando ganha item pronto (ready_at novo) ou quando alguém toca "Chamar na TV" (called_at novo).
-  const enqueue = (o) => { queue.current = queue.current.filter((x) => x.id !== o.id); queue.current.push(o); };
+  // Cada pedido aparece no painel do seu setor (chave comanda+setor). Entra no destaque quando ganha item pronto
+  // (ready_at novo) ou quando alguém toca "Chamar na TV" naquele setor (called_at novo).
+  const enqueue = (o) => { queue.current = queue.current.filter((x) => x.key !== o.key); queue.current.push(o); };
   const busy = useRef(false);
   const load2 = useCallback(async () => {
     if (busy.current) return;
     busy.current = true;
     try {
       const r = await api('/api/kitchen/board');
+      // compatibilidade: API antiga sem setores vira um painel só
+      if (!r.areas) r.areas = r.orders?.length ? [{ id: 0, name: '', orders: r.orders.map((o) => ({ ...o, key: String(o.id) })) }] : [];
       setData(r); setErr(null);
-      const marks = new Map(r.orders.map((o) => [o.id, { ready: o.ready_count > 0 ? o.ready_at : null, called: o.called_at || null }]));
+      const multi = r.areas.length > 1;
+      const all = r.areas.flatMap((a) => a.orders.map((o) => ({ ...o, sector: o.sector || a.name, __multi: multi })));
+      const marks = new Map(all.map((o) => [o.key, { ready: o.ready_count > 0 ? o.ready_at : null, called: o.called_at || null }]));
       if (known.current) {
-        for (const o of r.orders) {
-          const prev = known.current.get(o.id) || {};
-          const m = marks.get(o.id);
+        for (const o of all) {
+          const prev = known.current.get(o.key) || {};
+          const m = marks.get(o.key);
           const nowReady = m.ready && m.ready !== prev.ready;
           const called = m.called && m.called !== prev.called;
           if (nowReady || called) enqueue({ ...o, __called: called && !nowReady });
@@ -167,12 +173,13 @@ export default function TvBoard() {
   const bg = BACKGROUNDS[cfg.bg] || BACKGROUNDS.noite;
   const background = cfg.bg === 'imagem' && cfg.image ? `center/cover no-repeat url("${cfg.image.replace(/"/g, '')}"), #000` : (bg.css || BACKGROUNDS.noite.css);
   const font = (FONTS[cfg.font] || FONTS.bebas).family;
-  const preparing = (data?.orders || []).filter((o) => o.status === 'preparando' || o.pending > 0);
-  const ready = (data?.orders || []).filter((o) => o.status === 'pronto').sort((a, b) => new Date(b.called_at || b.ready_at) - new Date(a.called_at || a.ready_at));
+  const areas = (data?.areas || []).filter((a) => a.orders.length);
   const start = () => { setStarted(true); playSound('suave', cfg.volume * 0.5); document.documentElement.requestFullscreen?.().catch(() => {}); };
+  const sample = () => areas.flatMap((a) => a.orders.map((o) => ({ ...o, sector: o.sector || a.name, __multi: areas.length > 1 })))
+    .sort((a, b) => (b.status === 'pronto') - (a.status === 'pronto'))[0];
 
   return (
-    <div className="fixed inset-0 overflow-hidden" style={{ background, color: bg.ink, fontFamily: font }} data-tv>
+    <div className="fixed inset-0 flex flex-col overflow-hidden" style={{ background, color: bg.ink, fontFamily: font }} data-tv data-tv-areas={areas.length}>
       <style>{`
         @keyframes tvPop { 0% { transform: scale(.2) rotate(-8deg); opacity: 0 } 60% { transform: scale(1.12) rotate(2deg); opacity: 1 } 100% { transform: scale(1) rotate(0) } }
         @keyframes tvPulse { 0%,100% { transform: scale(1) } 50% { transform: scale(1.06) } }
@@ -183,10 +190,11 @@ export default function TvBoard() {
         @keyframes tvFlash { 0% { opacity: .9 } 100% { opacity: 0 } }
         @keyframes tvHalo { 0%,100% { transform: scale(.85); opacity: .6 } 50% { transform: scale(1.15); opacity: 1 } }
         @keyframes tvShake { 0%,100% { transform: translate(0,0) } 15% { transform: translate(-1.2vw,.6vw) } 30% { transform: translate(1vw,-.8vw) } 45% { transform: translate(-.6vw,.4vw) } 60% { transform: translate(.4vw,-.2vw) } }
+        @keyframes tvIn { from { opacity: 0; transform: scale(.96) } to { opacity: 1; transform: scale(1) } }
       `}</style>
       {/* cabeçalho */}
       <div className="flex items-center justify-between px-[3vw] pt-[2vh]">
-        <div className="text-[4.2vw] leading-none tracking-wide">{cfg.title}</div>
+        <div className="text-[4.2vw] leading-none tracking-wide">{cfg.title}{areas.length === 1 && areas[0].name ? <span className="opacity-60"> · {areas[0].name}</span> : null}</div>
         <div className="flex items-center gap-3 text-[1.6vw] opacity-80">
           <Clock />
           <button onClick={() => setShowCfg(true)} className="rounded-full p-2 opacity-40 hover:opacity-100" aria-label="Configurar painel"><Settings2 size={22} /></button>
@@ -194,38 +202,11 @@ export default function TvBoard() {
           <Link to="/cozinha" className="rounded-full p-2 opacity-40 hover:opacity-100" aria-label="Voltar"><ArrowLeft size={22} /></Link>
         </div>
       </div>
-      <div className={`grid h-[86vh] gap-[2vw] px-[3vw] pt-[2vh] ${cfg.showQueue ? 'grid-cols-[1fr_1.5fr]' : 'grid-cols-1'}`}>
-        {cfg.showQueue && (
-          <section className="flex min-h-0 flex-col rounded-[2vw] p-[1.5vw]" style={{ background: 'rgba(0,0,0,.28)' }}>
-            <h2 className="text-[2.6vw] leading-none opacity-80">Em preparo</h2>
-            <div className="mt-[1.5vh] grid flex-1 auto-rows-min grid-cols-3 gap-[1vw] overflow-hidden">
-              {preparing.map((o) => (
-                <div key={o.id} className="rounded-[1vw] px-[0.8vw] py-[0.8vh] text-center" style={{ background: 'rgba(255,255,255,.08)' }} data-tv-preparing={o.code}>
-                  <div className="text-[1vw] uppercase opacity-60">{label(o)}</div>
-                  <div className="text-[3.6vw] leading-none">{o.code}</div>
-                  {cfg.showName && o.name && <div className="truncate text-[1.2vw] opacity-80">{o.name}</div>}
-                  {o.ready_count > 0 && <div className="text-[0.9vw] opacity-70" style={{ color: bg.accent }}>parte pronta</div>}
-                </div>
-              ))}
-              {!preparing.length && <div className="col-span-3 text-[1.6vw] opacity-50">Nenhum pedido em preparo.</div>}
-            </div>
-          </section>
+      {/* um painel por setor com demanda: dois setores dividem a tela ao meio; um só ocupa a tela toda */}
+      <div className="flex min-h-0 flex-1 gap-[1.5vw] px-[2vw] pb-[2vh] pt-[2vh]">
+        {areas.length ? areas.map((a) => <Area key={a.id} a={a} n={areas.length} cfg={cfg} bg={bg} />) : (
+          <div className="grid flex-1 place-items-center rounded-[2vw] text-[3vw] opacity-50" style={{ background: 'rgba(0,0,0,.18)' }} data-tv-empty>Nenhum pedido no momento</div>
         )}
-        <section className="flex min-h-0 flex-col rounded-[2vw] p-[1.5vw]" style={{ background: 'rgba(0,0,0,.18)', boxShadow: `inset 0 0 0 .3vw ${bg.accent}55` }}>
-          <h2 className="text-[2.8vw] leading-none" style={{ color: bg.accent }}>Pronto para retirar</h2>
-          <div className="mt-[1.5vh] grid flex-1 auto-rows-min grid-cols-3 gap-[1.2vw] overflow-hidden">
-            {ready.map((o, i) => (
-              <div key={o.id} className="rounded-[1.2vw] px-[1vw] py-[1vh] text-center" data-tv-ready={o.code}
-                style={{ background: i === 0 ? bg.accent : 'rgba(255,255,255,.12)', color: i === 0 ? '#111' : bg.ink, animation: i === 0 ? 'tvPulse 1.6s ease-in-out infinite' : undefined }}>
-                <div className="text-[1.2vw] uppercase opacity-70">{label(o)}{o.table ? ` · mesa ${o.table}` : ''}</div>
-                <div className="text-[5.5vw] leading-none">{o.code}</div>
-                {cfg.showName && o.name && <div className="truncate text-[1.6vw]">{o.name}</div>}
-                {o.pending > 0 && <div className="text-[1vw] opacity-70">+{o.pending} em preparo</div>}
-              </div>
-            ))}
-            {!ready.length && <div className="col-span-3 text-[1.8vw] opacity-50">Aguardando pedidos prontos…</div>}
-          </div>
-        </section>
       </div>
       {err && <div className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded bg-black/60 px-3 py-1 text-sm text-white" style={{ fontFamily: 'Inter, sans-serif' }}>Sem conexão — tentando de novo…</div>}
 
@@ -241,7 +222,65 @@ export default function TvBoard() {
           </span>
         </button>
       )}
-      {showCfg && <TvSettings cfg={cfg} save={save} onClose={() => setShowCfg(false)} onTest={() => { const o = ready[0] || preparing[0] || { id: 0, code: '12', kind: 'comanda', name: 'Ana', items: [{ d: 'Hambúrguer da casa', q: 1 }] }; queue.current.unshift({ ...o, __test: true }); spotRef.current = null; setShowCfg(false); }} />}
+      {showCfg && <TvSettings cfg={cfg} save={save} onClose={() => setShowCfg(false)} onTest={() => { const o = sample() || { id: 0, key: 'teste', code: '12', kind: 'comanda', name: 'Ana', sector: 'Bar', __multi: true, items: [{ d: 'Caipirinha', q: 1 }] }; queue.current.unshift({ ...o, __test: true }); spotRef.current = null; setShowCfg(false); }} />}
+    </div>
+  );
+}
+
+// Painel de um setor: "Pronto para retirar" em destaque e a fila "Em preparo". Tamanhos acompanham quantos setores dividem a tela.
+function Area({ a, n, cfg, bg }) {
+  const preparing = a.orders.filter((o) => o.status === 'preparando' || o.pending > 0);
+  const ready = a.orders.filter((o) => o.status === 'pronto').sort((x, y) => new Date(y.called_at || y.ready_at) - new Date(x.called_at || x.ready_at));
+  const k = n === 1 ? 1 : n === 2 ? 0.72 : 0.56; // escala das letras
+  const v = (x) => `${(x * k).toFixed(2)}vw`;
+  const split = n > 1; // dividido: prontos em cima, fila embaixo
+  const readyCols = n === 1 ? 3 : 2;
+  const queueCols = n === 1 ? 3 : n === 2 ? 3 : 2;
+  const Ready = (
+    <section className="flex min-h-0 flex-col rounded-[1.6vw] p-[1.2vw]" style={{ flex: split ? '3 1 0' : '1.5 1 0', background: 'rgba(0,0,0,.18)', boxShadow: `inset 0 0 0 .3vw ${bg.accent}55` }}>
+      <h2 className="leading-none" style={{ color: bg.accent, fontSize: v(2.8) }}>Pronto para retirar</h2>
+      <div className="mt-[1.2vh] grid flex-1 auto-rows-min gap-[1vw] overflow-hidden" style={{ gridTemplateColumns: `repeat(${readyCols}, minmax(0,1fr))` }}>
+        {ready.map((o, i) => (
+          <div key={o.key} className="rounded-[1.2vw] px-[1vw] py-[1vh] text-center" data-tv-ready={o.code}
+            style={{ background: i === 0 ? bg.accent : 'rgba(255,255,255,.12)', color: i === 0 ? '#111' : bg.ink, animation: i === 0 ? 'tvPulse 1.6s ease-in-out infinite' : undefined }}>
+            <div className="uppercase opacity-70" style={{ fontSize: v(1.2) }}>{label(o)}{o.table ? ` · mesa ${o.table}` : ''}</div>
+            <div className="leading-none" style={{ fontSize: v(5.5) }}>{o.code}</div>
+            {cfg.showName && o.name && <div className="truncate" style={{ fontSize: v(1.6) }}>{o.name}</div>}
+            {o.pending > 0 && <div className="opacity-70" style={{ fontSize: v(1) }}>+{o.pending} em preparo</div>}
+          </div>
+        ))}
+        {!ready.length && <div className="opacity-50" style={{ gridColumn: '1 / -1', fontSize: v(1.8) }}>Aguardando pedidos prontos…</div>}
+      </div>
+    </section>
+  );
+  const Queue = cfg.showQueue && (
+    <section className="flex min-h-0 flex-col rounded-[1.6vw] p-[1.2vw]" style={{ flex: split ? '2 1 0' : '1 1 0', background: 'rgba(0,0,0,.28)' }}>
+      <h2 className="leading-none opacity-80" style={{ fontSize: v(2.6) }}>Em preparo <span className="opacity-60">({preparing.length})</span></h2>
+      <div className="mt-[1.2vh] grid flex-1 auto-rows-min gap-[0.8vw] overflow-hidden" style={{ gridTemplateColumns: `repeat(${queueCols}, minmax(0,1fr))` }}>
+        {preparing.map((o) => (
+          <div key={o.key} className="rounded-[1vw] px-[0.8vw] py-[0.8vh] text-center" style={{ background: 'rgba(255,255,255,.08)' }} data-tv-preparing={o.code}>
+            <div className="uppercase opacity-60" style={{ fontSize: v(1) }}>{label(o)}</div>
+            <div className="leading-none" style={{ fontSize: v(3.6) }}>{o.code}</div>
+            {cfg.showName && o.name && <div className="truncate opacity-80" style={{ fontSize: v(1.2) }}>{o.name}</div>}
+            {o.ready_count > 0 && <div className="opacity-70" style={{ fontSize: v(0.9), color: bg.accent }}>parte pronta</div>}
+          </div>
+        ))}
+        {!preparing.length && <div className="opacity-50" style={{ gridColumn: '1 / -1', fontSize: v(1.6) }}>Nada na fila.</div>}
+      </div>
+    </section>
+  );
+  return (
+    <div className="flex min-h-0 min-w-0 flex-col gap-[1vh]" style={{ flex: '1 1 0', animation: 'tvIn .5s ease-out both' }} data-tv-area={a.name}>
+      {split && (
+        <div className="flex items-baseline justify-between px-[0.5vw]">
+          <div className="uppercase leading-none tracking-wide" style={{ fontSize: v(3.4), color: bg.accent }}>{a.name}</div>
+          <div className="opacity-70" style={{ fontSize: v(1.4) }}>{ready.length} pronto(s) · {preparing.length} em preparo</div>
+        </div>
+      )}
+      <div className={`flex min-h-0 flex-1 gap-[1.2vw] ${split ? 'flex-col' : 'flex-row-reverse'}`}>
+        {Ready}
+        {Queue}
+      </div>
     </div>
   );
 }
@@ -264,6 +303,7 @@ function Spotlight({ o, cfg, bg }) {
       <div className="pointer-events-none absolute inset-0" style={{ background: '#fff', animation: 'tvFlash 1.2s ease-out both' }} />
       {CONFETTI.map((c, i) => <span key={i} className="absolute top-0 block rounded-sm" style={{ left: `${c.left}%`, width: `${c.size}vw`, height: `${c.size * 1.6}vw`, background: `hsl(${c.hue} 90% 60%)`, animation: `tvFall ${c.dur}s ${c.delay}s linear infinite` }} />)}
       <div className="relative text-center" style={{ animation: 'tvPop .8s cubic-bezier(.2,1.6,.4,1) both' }}>
+        {o.sector && <div className="mx-auto mb-[1vh] inline-block rounded-full px-[2vw] py-[0.6vh] text-[2.6vw] uppercase leading-none" style={{ background: bg.accent, color: '#111' }} data-tv-spot-sector>{o.sector}</div>}
         <div className="text-[4.2vw] uppercase leading-none" style={{ color: bg.accent, animation: 'tvBlink .8s step-end infinite', textShadow: '0 0 2vw rgba(0,0,0,.8)' }}>
           {o.__called && o.status !== 'pronto' ? 'Atenção!' : 'Pedido pronto!'}
         </div>

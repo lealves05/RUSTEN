@@ -1127,6 +1127,43 @@ await check('vendas da maquininha: produtos do relatório viram saída de estoqu
   await apiC('GET', `/api/pos-sales/${imp3.data.id}/items`);
   assert.equal((await apiC('POST', `/api/pos-sales/${imp3.data.id}/items/post`)).data.code, 'conference_only');
 });
+await check('painel da TV: separa por setor, mantém comanda paga com item a retirar e chama só o setor escolhido', async () => {
+  const withSector = bProducts.filter((p) => p.sector_id);
+  const kitchenP = withSector.find((p) => p.id === bBurger.id) || withSector[0];
+  const barP = withSector.find((p) => p.sector_id !== kitchenP.sector_id);
+  assert.ok(kitchenP && barP, 'demonstração com dois setores');
+  const s = (await apiC('POST', '/api/pdv/sessions', { kind: 'balcao', customer_name: 'Joana Teste' })).data;
+  const a = (await apiC('POST', '/api/pdv/items', { session_id: s.id, product_id: kitchenP.id, launch_mode: 'manual', idempotency_key: key(),
+    ...(kitchenP.groups?.length ? { option_ids: [kitchenP.groups[0].options[0].id] } : {}) })).data;
+  const b = (await apiC('POST', '/api/pdv/items', { session_id: s.id, product_id: barP.id, launch_mode: 'manual', idempotency_key: key(),
+    ...(barP.groups?.length ? { option_ids: [barP.groups[0].options[0].id] } : {}) })).data;
+  await apiC('POST', `/api/kitchen/items/${b.item.id}/status`, { to: 'pronto' });
+  let bd = (await apiC('GET', '/api/kitchen/board')).data;
+  const area = (sid) => bd.areas.find((x) => x.id === sid);
+  assert.ok(area(kitchenP.sector_id) && area(barP.sector_id), JSON.stringify(bd.areas.map((x) => x.name)));
+  assert.equal(area(barP.sector_id).orders.find((o) => o.id === s.id).status, 'pronto');
+  assert.equal(area(kitchenP.sector_id).orders.find((o) => o.id === s.id).status, 'preparando');
+  // pagou e fechou no caixa: continua no painel até retirar
+  const full = (await apiC('GET', `/api/pdv/sessions/${s.id}`)).data;
+  await apiC('POST', `/api/pdv/sessions/${s.id}/payments`, { method: 'pix', amount_cents: full.totals.balance, idempotency_key: key() });
+  const f2 = (await apiC('GET', `/api/pdv/sessions/${s.id}`)).data;
+  assert.equal((await apiC('POST', `/api/pdv/sessions/${s.id}/close`, { version: f2.version })).status, 200);
+  bd = (await apiC('GET', '/api/kitchen/board')).data;
+  assert.ok(area(barP.sector_id).orders.find((o) => o.id === s.id), 'comanda paga continua no painel do bar');
+  // chamar só o bar
+  const call = await apiC('POST', `/api/kitchen/sessions/${s.id}/call`, { sector_ids: [barP.sector_id] });
+  assert.equal(call.status, 200, JSON.stringify(call.data)); assert.deepEqual(call.data.sectors, [barP.sector_id]);
+  bd = (await apiC('GET', '/api/kitchen/board')).data;
+  assert.ok(area(barP.sector_id).orders.find((o) => o.id === s.id).called_at);
+  assert.equal(area(kitchenP.sector_id).orders.find((o) => o.id === s.id).called_at, null);
+  // retirado: sai do painel do bar; a cozinha segue
+  await apiC('POST', `/api/kitchen/items/${b.item.id}/status`, { to: 'entregue' });
+  bd = (await apiC('GET', '/api/kitchen/board')).data;
+  assert.ok(!area(barP.sector_id)?.orders.find((o) => o.id === s.id));
+  assert.ok(area(kitchenP.sector_id).orders.find((o) => o.id === s.id));
+  await apiC('POST', `/api/kitchen/items/${a.item.id}/status`, { to: 'pronto' });
+  await apiC('POST', `/api/kitchen/items/${a.item.id}/status`, { to: 'entregue' });
+});
 await check('remoção da demonstração preserva produtos já vendidos', async () => {
   const login = await anon('POST', '/api/auth/login', { email: 'a@teste.dev', password: 'Motocustom2026x' });
   const a2 = client(login.data.access_token, A.terminal);

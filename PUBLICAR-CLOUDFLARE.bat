@@ -15,6 +15,14 @@ set "WT=%~dp0..\_cloudflare\RUSTEN"
 set "KEYS=%USERPROFILE%\.plataforma-cloudflare"
 set "LOG=%~dp0publicar-cloudflare.log"
 if exist "%~dp0..\node-v24.20.0-win-x64\node.exe" set "PATH=%~dp0..\node-v24.20.0-win-x64;%PATH%"
+rem o npm global deste Windows esta corrompido: usa o npm que vem com o Node portatil
+set "NODEDIR=%~dp0..\node-v24.20.0-win-x64"
+if not exist "%NODEDIR%\node.exe" set "NODEDIR="
+if defined NODEDIR set "NPM_CONFIG_PREFIX=%NODEDIR%"
+if defined NODEDIR if not exist "%TEMP%\npm-shim" mkdir "%TEMP%\npm-shim"
+if defined NODEDIR >"%TEMP%\npm-shim\npm.cmd" echo @"%NODEDIR%\node.exe" "%NODEDIR%\node_modules\npm\bin\npm-cli.js" %%*
+if defined NODEDIR >"%TEMP%\npm-shim\npx.cmd" echo @"%NODEDIR%\node.exe" "%NODEDIR%\node_modules\npm\bin\npx-cli.js" %%*
+if defined NODEDIR set "PATH=%TEMP%\npm-shim;%NODEDIR%;%PATH%"
 echo [%date% %time%] inicio > "%LOG%"
 where git >nul 2>nul || (echo Git nao encontrado. Instale em https://git-scm.com/download/win & pause & exit /b 1)
 where node >nul 2>nul || (echo Node nao encontrado. & pause & exit /b 1)

@@ -5,6 +5,8 @@ import { z } from 'zod';
 import { q, tx, h, parse, bad, notFound, conflict } from '../lib/core.js';
 import { need, audit, assertCan, rateLimit } from '../lib/auth.js';
 import { readImage, matchLines, aliasKey, aiAvailable } from '../lib/notes.js';
+import { classifyCode, purchaseCode } from '../lib/barcode.js';
+import { xmlByKey, focusToken } from '../lib/nfeFetch.js';
 import { balances, receive, theoreticalCost, requirements, stockConfig } from '../lib/stock.js';
 
 export const router = Router();
@@ -164,7 +166,7 @@ router.get('/purchases', need('estoque.visualizar'), h(async (req, res) => {
       (select json_agg(json_build_object('id', l.id, 'stock_item_id', l.stock_item_id, 'name', s.name, 'unit', s.unit, 'qty', l.qty, 'received_qty', l.received_qty,
          'unit_cost_cents', l.unit_cost_cents) order by l.id) from purchase_lines l join stock_items s on s.id = l.stock_item_id where l.purchase_id = p.id) as lines
     from purchases p left join users u on u.id = p.created_by where p.company_id = $1 order by p.id desc limit 100`, [req.ctx.companyId])).rows;
-  res.json(rows);
+  res.json(rows.map((r) => ({ ...r, code: purchaseCode(r.id) })));
 }));
 
 router.post('/purchases', need('compras.gerenciar'), h(async (req, res) => {
@@ -188,7 +190,8 @@ router.post('/purchases', need('compras.gerenciar'), h(async (req, res) => {
 
 // Recebimento (parcial ou total): gera entradas e atualiza custo médio
 router.post('/purchases/:id/receive', need('compras.gerenciar'), h(async (req, res) => {
-  const b = parse(z.object({ lines: z.array(z.object({ line_id: z.number().int(), qty: qtyNum })).min(1).max(100) }), req.body);
+  const b = parse(z.object({ lines: z.array(z.object({ line_id: z.number().int(), qty: qtyNum,
+    unit_cost_cents: z.number().int().min(0).max(100000000).optional() })).min(1).max(100) }), req.body);
   const out = await tx(async (db) => {
     const p = (await db.query('select * from purchases where id = $1 and company_id = $2 for update', [Number(req.params.id), req.ctx.companyId])).rows[0];
     if (!p) throw notFound('Compra não encontrada');
@@ -197,12 +200,15 @@ router.post('/purchases/:id/receive', need('compras.gerenciar'), h(async (req, r
       const l = (await db.query('select * from purchase_lines where id = $1 and purchase_id = $2 for update', [r.line_id, p.id])).rows[0];
       if (!l) throw bad('Linha inválida');
       if (Number(l.received_qty) + r.qty > Number(l.qty) + 0.0001) throw bad('Quantidade recebida maior que a comprada');
-      await db.query('update purchase_lines set received_qty = received_qty + $2 where id = $1', [l.id, r.qty]);
-      await receive(db, req.ctx, l.stock_item_id, r.qty, Number(l.unit_cost_cents), { type: 'purchase', id: p.id }, `Compra ${p.id} — ${p.supplier}`);
+      // custo informado no recebimento (preço mudou na entrega) atualiza a linha e entra no custo médio
+      const cost = r.unit_cost_cents ?? Number(l.unit_cost_cents);
+      await db.query('update purchase_lines set received_qty = received_qty + $2, unit_cost_cents = $3 where id = $1', [l.id, r.qty, cost]);
+      await receive(db, req.ctx, l.stock_item_id, r.qty, cost, { type: 'purchase', id: p.id }, `Compra ${p.id} — ${p.supplier}`);
     }
     const left = (await db.query('select count(*)::int as n from purchase_lines where purchase_id = $1 and received_qty < qty', [p.id])).rows[0].n;
     const status = left ? 'parcial' : 'recebida';
-    await db.query('update purchases set status = $2 where id = $1', [p.id, status]);
+    await db.query(`update purchases set status = $2, total_cents = (select coalesce(sum(round(qty * unit_cost_cents)), 0) from purchase_lines where purchase_id = $1)
+      where id = $1`, [p.id, status]);
     await audit(db, req.ctx, 'compra.recebida', { entity: 'purchase', entityId: p.id, data: { status, lines: b.lines.length } });
     return { status };
   });
@@ -478,7 +484,7 @@ router.post('/items/from-products', need('estoque.ajustar'), h(async (req, res) 
 // ---- Leitura de notas: foto (IA de visão) ou XML da NF-e → conferência → compra recebida no estoque ----
 router.get('/notes/status', need('compras.gerenciar'), h(async (req, res) => {
   const own = (await q("select 1 from company_secrets where company_id = $1 and key = 'ai_api_key'", [req.ctx.companyId])).rows[0];
-  res.json({ photo: await aiAvailable(req.ctx.companyId), own_key: !!own });
+  res.json({ photo: await aiAvailable(req.ctx.companyId), own_key: !!own, xml_by_key: !!(await focusToken(req.ctx.companyId)) });
 }));
 
 router.put('/notes/key', need('compras.gerenciar', 'configuracoes.gerenciar'), h(async (req, res) => {
@@ -488,6 +494,42 @@ router.put('/notes/key', need('compras.gerenciar', 'configuracoes.gerenciar'), h
   else await q(`insert into company_secrets (company_id, key, value) values ($1,'ai_api_key',$2) on conflict (company_id, key) do update set value = excluded.value, updated_at = now()`, [req.ctx.companyId, b.api_key]);
   await audit({ query: q }, req.ctx, 'estoque.leitura_chave', { data: { removed: !b.api_key } });
   res.json({ ok: true });
+}));
+
+// Busca do XML pela chave (Focus NFe): token da empresa, nunca devolvido ao navegador
+router.put('/notes/focus', need('compras.gerenciar', 'configuracoes.gerenciar'), h(async (req, res) => {
+  const b = parse(z.object({ token: z.string().trim().max(200) }), req.body);
+  if (b.token && !/^[A-Za-z0-9_-]{16,200}$/.test(b.token)) throw bad('Token inválido: copie o token de produção do painel da Focus NFe');
+  if (!b.token) await q("delete from company_secrets where company_id = $1 and key = 'focus_token'", [req.ctx.companyId]);
+  else await q(`insert into company_secrets (company_id, key, value) values ($1,'focus_token',$2) on conflict (company_id, key) do update set value = excluded.value, updated_at = now()`, [req.ctx.companyId, b.token]);
+  await audit({ query: q }, req.ctx, 'estoque.focus_token', { data: { removed: !b.token } });
+  res.json({ ok: true });
+}));
+
+// ---- Código de barras: chave da NF-e (DANFE) ou pedido de compra impresso pelo RUSTEN ----
+router.post('/barcode', need('compras.gerenciar'), h(async (req, res) => {
+  const b = parse(z.object({ code: z.string().trim().min(4).max(80) }), req.body);
+  const c = classifyCode(b.code);
+  if (c.kind === 'invalido') throw bad(c.message, 'barcode_invalid');
+  const cid = req.ctx.companyId;
+  if (c.kind === 'pedido') {
+    const p = (await q('select id, supplier, document, due_date, status, total_cents from purchases where id = $1 and company_id = $2', [c.purchase_id, cid])).rows[0];
+    if (!p) throw notFound('Pedido de compra não encontrado nesta empresa');
+    const lines = (await q(`select l.id, l.stock_item_id, s.name, s.unit, l.qty, l.received_qty, l.unit_cost_cents, s.avg_cost_cents
+      from purchase_lines l join stock_items s on s.id = l.stock_item_id where l.purchase_id = $1 order by l.id`, [p.id])).rows;
+    return res.json({ kind: 'pedido', purchase: { ...p, code: purchaseCode(p.id), lines } });
+  }
+  const dup = (await q("select id, status from purchases where company_id = $1 and nfe_key = $2 and status <> 'cancelada'", [cid, c.key])).rows[0];
+  const sup = (await q(`select supplier from purchases where company_id = $1 and supplier_doc = $2 and status <> 'cancelada' order by id desc limit 1`, [cid, c.info.cnpj])).rows[0];
+  res.json({ kind: 'nfe', key: c.key, info: c.info, duplicate: dup ? dup.id : null, supplier: sup?.supplier || null, xml_by_key: !!(await focusToken(cid)) });
+}));
+
+router.post('/notes/xml-by-key', need('compras.gerenciar'), h(async (req, res) => {
+  const b = parse(z.object({ key: z.string().regex(/^\d{44}$/) }), req.body);
+  const c = classifyCode(b.key);
+  if (c.kind !== 'nfe') throw bad('Chave de acesso inválida', 'barcode_invalid');
+  await rateLimit(`nfexml:${req.ctx.companyId}`, 120, 3600);
+  res.json(await xmlByKey(req.ctx.companyId, c.key));
 }));
 
 router.post('/notes/read', need('compras.gerenciar'), h(async (req, res) => {
@@ -507,6 +549,7 @@ router.post('/notes/confirm', need('compras.gerenciar'), h(async (req, res) => {
   const b = parse(z.object({
     supplier: z.string().trim().min(2).max(100), document: z.string().trim().max(60).optional().nullable(), due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
     source: z.enum(['foto', 'xml', 'manual']), nfe_key: z.string().regex(/^\d{44}$/).optional().nullable(), receive: z.boolean().default(true),
+    supplier_doc: z.string().regex(/^\d{11}$|^\d{14}$/).optional().nullable(),
     lines: z.array(z.object({
       description: z.string().max(120), alias: z.string().max(120).optional(),
       stock_item_id: z.number().int().optional().nullable(),
@@ -534,9 +577,9 @@ router.post('/notes/confirm', need('compras.gerenciar'), h(async (req, res) => {
       resolved.push({ ...l, stock_item_id: Number(id), stock_qty: Math.round(l.qty * l.factor * 1000) / 1000, stock_cost: Math.round(l.unit_cost_cents / l.factor) });
     }
     const total = b.lines.reduce((s, l) => s + Math.round(l.qty * l.unit_cost_cents), 0);
-    const p = (await db.query(`insert into purchases (company_id, supplier, document, due_date, total_cents, created_by, source, nfe_key, notes)
-      values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`, [req.ctx.companyId, b.supplier, b.document ?? null, b.due_date ?? null, total, req.ctx.userId, b.source, b.nfe_key ?? null,
-      ({ foto: 'Lançada pela foto da nota (conferida)', xml: 'Importada do XML da NF-e', manual: 'Nota/pedido digitado manualmente' })[b.source]])).rows[0];
+    const p = (await db.query(`insert into purchases (company_id, supplier, document, due_date, total_cents, created_by, source, nfe_key, notes, supplier_doc)
+      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id`, [req.ctx.companyId, b.supplier, b.document ?? null, b.due_date ?? null, total, req.ctx.userId, b.source, b.nfe_key ?? null,
+      ({ foto: 'Lançada pela foto da nota (conferida)', xml: 'Importada do XML da NF-e', manual: 'Nota/pedido digitado manualmente' })[b.source], b.supplier_doc ?? (b.nfe_key ? b.nfe_key.slice(6, 20) : null)])).rows[0];
     for (const l of resolved) {
       const pl = (await db.query('insert into purchase_lines (company_id, purchase_id, stock_item_id, qty, unit_cost_cents) values ($1,$2,$3,$4,$5) returning id',
         [req.ctx.companyId, p.id, l.stock_item_id, l.stock_qty, l.stock_cost])).rows[0];

@@ -11,6 +11,8 @@
   },
   "license": "UNLICENSED",
   "dependencies": {
+    "@zxing/browser": "^0.1.5",
+    "@zxing/library": "^0.21.3",
     "lucide-react": "^1.49.0",
     "pdfjs-dist": "^5.7.284",
     "qrcode": "^1.5.4",

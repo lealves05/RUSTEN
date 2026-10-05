@@ -818,6 +818,56 @@ await check('nota por foto: sem chave avisa; com leitura, confere, cria insumo, 
   assert.equal(man.status, 201, JSON.stringify(man.data));
   delete process.env.AI_API_URL; fake.close();
 });
+await check('código de barras: pedido de compra recebe com novo custo; chave da NF-e confere, busca XML (Focus) e não duplica', async () => {
+  const { purchaseCode, nfeKeyDigit } = await import('../src/lib/barcode.js');
+  const before = (await apiC('GET', '/api/stock/items')).data.find((x) => x.id === carne);
+  const pc = await apiC('POST', '/api/stock/purchases', { supplier: 'Frigorífico Boi Bom', lines: [{ stock_item_id: carne, qty: 4, unit_cost_cents: 3000 }] });
+  assert.equal(pc.status, 201);
+  const list = (await apiC('GET', '/api/stock/purchases')).data;
+  assert.equal(list.find((x) => x.id === pc.data.id).code, purchaseCode(pc.data.id));
+  const r = await apiC('POST', '/api/stock/barcode', { code: purchaseCode(pc.data.id) });
+  assert.equal(r.status, 200, JSON.stringify(r.data)); assert.equal(r.data.kind, 'pedido'); assert.equal(r.data.purchase.lines.length, 1);
+  assert.equal((await api('POST', '/api/stock/barcode', { code: purchaseCode(pc.data.id) })).status, 404, 'pedido de outra empresa não aparece');
+  assert.equal((await apiC('POST', '/api/stock/barcode', { code: 'PC000000010' })).data.code, 'barcode_invalid');
+  const line = r.data.purchase.lines[0];
+  const rec = await apiC('POST', `/api/stock/purchases/${pc.data.id}/receive`, { lines: [{ line_id: line.id, qty: 4, unit_cost_cents: 3600 }] });
+  assert.equal(rec.status, 200, JSON.stringify(rec.data)); assert.equal(rec.data.status, 'recebida');
+  const after = (await apiC('GET', '/api/stock/items')).data.find((x) => x.id === carne);
+  assert.equal(after.balance, before.balance + 4);
+  const prev = Math.max(0, before.balance);
+  assert.equal(Math.round(after.avg_cost_cents), Math.round((prev * before.avg_cost_cents + 4 * 3600) / (prev + 4)), 'custo médio com o preço da entrega');
+  assert.equal((await apiC('GET', '/api/stock/purchases')).data.find((x) => x.id === pc.data.id).total_cents, 14400);
+
+  // NF-e: chave com dígito verificador; sem Focus pede o XML; com Focus falsa traz o XML
+  const b43 = '4126091122233300014455001000000777100000077';
+  const key = b43 + nfeKeyDigit(b43);
+  const k1 = await apiC('POST', '/api/stock/barcode', { code: key });
+  assert.equal(k1.data.kind, 'nfe'); assert.equal(k1.data.info.cnpj, '11222333000144'); assert.equal(k1.data.duplicate, null); assert.equal(k1.data.xml_by_key, false);
+  assert.equal((await apiC('POST', '/api/stock/notes/xml-by-key', { key })).data.code, 'focus_not_configured');
+  const xml = `<nfeProc><NFe><infNFe Id="NFe${key}"><emit><CNPJ>11222333000144</CNPJ><xNome>Distribuidora Sul</xNome></emit><det><prod><xProd>CARNE</xProd><qCom>1</qCom></prod></det></infNFe></NFe></nfeProc>`;
+  let calls = [];
+  const focus = http.createServer((rq, rs) => { let b = ''; rq.on('data', (c) => { b += c; }); rq.on('end', () => {
+    calls.push(`${rq.method} ${rq.url}`);
+    assert.equal(rq.headers.authorization, `Basic ${Buffer.from('focus-token-teste-123456:').toString('base64')}`);
+    if (rq.method === 'GET' && calls.filter((c) => c.startsWith('GET')).length === 1) { rs.writeHead(404); return rs.end('{"codigo":"nao_encontrado"}'); }
+    if (rq.method === 'POST') { assert.equal(JSON.parse(b).tipo, 'ciencia'); rs.writeHead(201, { 'content-type': 'application/json' }); return rs.end('{"status":"evento_registrado"}'); }
+    rs.writeHead(200, { 'content-type': 'application/xml' }); rs.end(xml);
+  }); });
+  await new Promise((ok) => focus.listen(0, '127.0.0.1', ok));
+  process.env.FOCUS_API_URL = `http://127.0.0.1:${focus.address().port}`;
+  assert.equal((await apiC('PUT', '/api/stock/notes/focus', { token: 'focus-token-teste-123456' })).status, 200);
+  const p1 = await apiC('POST', '/api/stock/notes/xml-by-key', { key });
+  assert.equal(p1.data.pending, true, JSON.stringify(p1.data));
+  const p2 = await apiC('POST', '/api/stock/notes/xml-by-key', { key });
+  assert.ok(p2.data.xml.includes(key));
+  const conf = await apiC('POST', '/api/stock/notes/confirm', { supplier: 'Distribuidora Sul', source: 'xml', nfe_key: key, supplier_doc: '11222333000144',
+    lines: [{ description: 'CARNE', stock_item_id: carne, qty: 1, unit_cost_cents: 3500 }] });
+  assert.equal(conf.status, 201, JSON.stringify(conf.data));
+  const k2 = await apiC('POST', '/api/stock/barcode', { code: key });
+  assert.equal(k2.data.duplicate, conf.data.purchase_id); assert.equal(k2.data.supplier, 'Distribuidora Sul');
+  assert.equal((await apiC('GET', '/api/stock/notes/status')).data.xml_by_key, true);
+  delete process.env.FOCUS_API_URL; focus.close();
+});
 await check('módulos isolados por empresa', async () => {
   assert.equal((await api('GET', `/api/customers/${custId}`)).status, 404);
   assert.ok(!(await api('GET', '/api/stock/items')).data.find((x) => x.id === carne));

@@ -1,6 +1,7 @@
 // Estoque: insumos e saldos, fichas técnicas versionadas, compras com recebimento parcial, inventário e produção.
-import { useEffect, useState } from 'react';
-import { Camera, CheckCircle2, ClipboardCheck, Download, FileCode2, Keyboard, KeyRound, Loader2, Package, Plus, ShieldCheck, ShoppingCart, Trash2, Wrench } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Barcode, Camera, CheckCircle2, ClipboardCheck, Download, FileCode2, Keyboard, KeyRound, Loader2, Package, Plus, Printer, ScanLine, ShieldCheck, ShoppingCart, Trash2, Wrench, X } from 'lucide-react';
+import { code128Svg, startScanner } from '../lib/barcode.js';
 import { api, download } from '../lib/api.js';
 import { money, dateTime, parseCents, centsToInput } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
@@ -298,7 +299,8 @@ function Purchases({ stock, onChanged }) {
             <tr key={x.id}><td>{x.id}</td><td className="font-semibold">{x.supplier}<div className="text-xs font-normal text-muted">{x.lines.map((l) => `${qfmt(l.qty, l.unit)} ${l.name}`).join(', ')}</div></td>
               <td>{x.document || '—'}</td><td>{x.due_date ? x.due_date.split('-').reverse().join('/') : '—'}</td>
               <td><Badge tone={x.status === 'recebida' ? 'ok' : x.status === 'cancelada' ? 'muted' : 'warn'}>{x.status}</Badge></td><td className="text-right">{money(x.total_cents)}</td>
-              <td className="whitespace-nowrap text-right">{['aberta', 'parcial'].includes(x.status) && s.can('compras.gerenciar') && <button className="text-xs underline" onClick={() => setReceiving(x)}>receber</button>}
+              <td className="whitespace-nowrap text-right">{x.status !== 'cancelada' && <><button className="inline-flex items-center gap-1 text-xs underline" onClick={() => { if (!printPurchase(x, s.me?.company?.name || '')) toast('Permita janelas pop-up para imprimir', 'bad'); }} aria-label={`Imprimir pedido ${x.id}`}><Printer size={12} /> pedido</button>{['aberta', 'parcial'].includes(x.status) && ' · '}</>}
+                {['aberta', 'parcial'].includes(x.status) && s.can('compras.gerenciar') && <button className="text-xs underline" onClick={() => setReceiving(x)}>receber</button>}
                 {x.status === 'aberta' && s.can('compras.gerenciar') && <> · <button className="text-xs underline" onClick={() => cancel(x)}>cancelar</button></>}</td></tr>
           ))}</tbody></table></div>
       )}
@@ -629,6 +631,141 @@ function Corrections({ stock, onChanged, goItems }) {
   );
 }
 
+// ---- Código de barras: leitor (funciona como teclado) ou câmera ----
+function BarcodeEntry({ busy, onResult, onError }) {
+  const [code, setCode] = useState('');
+  const [reading, setReading] = useState(false);
+  const [cam, setCam] = useState(false);
+  const input = useRef(null);
+  const video = useRef(null);
+  const scanner = useRef(null);
+  useEffect(() => { input.current?.focus(); }, []);
+  useEffect(() => () => scanner.current?.stop(), []);
+  const send = async (raw) => {
+    const v = String(raw || '').trim(); if (!v) return;
+    setReading(true); onError(null);
+    try { onResult(await api('/api/stock/barcode', { method: 'POST', body: { code: v } })); setCode(''); }
+    catch (e) { onError(e); } finally { setReading(false); input.current?.focus(); }
+  };
+  const openCam = async () => {
+    setCam(true);
+    await new Promise((r) => setTimeout(r, 50));
+    scanner.current = await startScanner(video.current, (txt) => { setCam(false); send(txt); }, (e) => { setCam(false); onError(e); });
+  };
+  const closeCam = () => { scanner.current?.stop(); setCam(false); };
+  return (
+    <div className="card p-4" data-barcode>
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="flex items-center gap-2"><Barcode size={28} className="text-copper" />
+          <div><div className="font-display text-2xl leading-none">Ler código de barras</div>
+            <div className="text-xs text-muted">DANFE da NF-e (chave de 44 dígitos) ou pedido de compra impresso pelo RUSTEN. Use o leitor, a câmera ou digite.</div></div></div>
+        <form className="flex min-w-[260px] flex-1 gap-2" onSubmit={(e) => { e.preventDefault(); send(code); }}>
+          <input ref={input} className="input font-mono" inputMode="numeric" autoComplete="off" placeholder="Aponte o leitor aqui…" value={code}
+            onChange={(e) => setCode(e.target.value)} aria-label="Código de barras" disabled={busy || reading} data-barcode-input />
+          <button className="btn-primary" disabled={busy || reading || !code.trim()}>{reading ? <Loader2 className="animate-spin" size={16} /> : <ScanLine size={16} />} Lançar</button>
+        </form>
+        <button type="button" className="btn-ghost" onClick={openCam} disabled={busy || reading}><Camera size={16} /> Câmera</button>
+      </div>
+      {cam && (
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/90 p-4">
+          <video ref={video} className="max-h-[70vh] w-full max-w-xl rounded-lg" playsInline muted />
+          <p className="text-sm text-white">Aproxime o código de barras do DANFE ou do pedido. Deite o celular para códigos longos.</p>
+          <button className="btn-ghost text-white" onClick={closeCam}><X size={16} /> Fechar</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Pedido de compra lido pelo código: confere o que chegou (quantidade e preço) e lança no estoque
+function ReceiveByCode({ purchase, onClose, onDone }) {
+  const [rows, setRows] = useState(() => purchase.lines.map((l) => ({ ...l, left: Math.max(0, Number(l.qty) - Number(l.received_qty)),
+    qty: String(Math.max(0, Number(l.qty) - Number(l.received_qty))).replace('.', ','), cost: centsToInput(Math.round(Number(l.unit_cost_cents))) })));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const total = rows.reduce((a, r) => a + Math.round(num(r.qty || 0) * (parseCents(r.cost || '0') || 0)), 0);
+  const save = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const lines = rows.filter((r) => num(r.qty) > 0).map((r) => ({ line_id: r.id, qty: num(r.qty), unit_cost_cents: parseCents(r.cost || '0') ?? Number(r.unit_cost_cents) }));
+      if (!lines.length) throw new Error('Nada a receber');
+      const out = await api(`/api/stock/purchases/${purchase.id}/receive`, { method: 'POST', body: { lines } });
+      onDone(out.status);
+    } catch (e) { setErr(e); } finally { setBusy(false); }
+  };
+  return (
+    <div className="card p-4" data-po={purchase.id}>
+      <div className="flex flex-wrap items-baseline gap-3">
+        <span className="font-display text-2xl">Pedido de compra #{purchase.id}</span>
+        <span className="text-muted">{purchase.supplier}{purchase.document ? ` · ${purchase.document}` : ''}</span>
+        <Badge tone="warn">{purchase.status}</Badge>
+      </div>
+      <p className="mt-1 text-sm text-muted">Já vem preenchido com o que falta receber. Ajuste se chegou diferente ou se o preço mudou: o custo médio do insumo é recalculado.</p>
+      <table className="table-clean mt-2">
+        <thead><tr><th>Insumo</th><th>Falta</th><th className="w-28">Chegou</th><th className="w-32">R$ unit.</th><th className="text-right">Total</th></tr></thead>
+        <tbody>{rows.map((r, i) => (
+          <tr key={r.id}>
+            <td className="font-semibold">{r.name}<div className="text-xs font-normal text-muted">custo médio atual {money(Math.round(Number(r.avg_cost_cents)))} / {r.unit}</div></td>
+            <td className="text-sm text-muted">{qfmt(r.left, r.unit)}</td>
+            <td><input className="input px-2" inputMode="decimal" value={r.qty} onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, qty: e.target.value } : x)))} aria-label={`Chegou de ${r.name}`} /></td>
+            <td><input className="input px-2" inputMode="decimal" value={r.cost} onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, cost: e.target.value } : x)))} aria-label={`Preço de ${r.name}`} /></td>
+            <td className="text-right">{money(Math.round(num(r.qty || 0) * (parseCents(r.cost || '0') || 0)))}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+      <ErrorBox error={err} />
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <span className="font-display text-2xl">Total {money(total)}</span>
+        <div className="ml-auto flex gap-2">
+          <button className="btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn-primary" disabled={busy} onClick={save} data-po-confirm>{busy ? <Loader2 className="animate-spin" size={16} /> : <CheckCircle2 size={16} />} Receber e lançar no estoque</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FocusTokenCard({ enabled, onSaved }) {
+  const toast = useToast();
+  const [token, setToken] = useState('');
+  const save = async (value) => {
+    try { await api('/api/stock/notes/focus', { method: 'PUT', body: { token: value } }); setToken(''); onSaved(); toast(value ? 'Busca do XML pela chave ativada' : 'Busca do XML pela chave desligada'); }
+    catch (x) { toast(x.message, 'bad'); }
+  };
+  return (
+    <div className="card p-4 text-sm">
+      <h3 className="flex items-center gap-2 font-display text-xl"><Barcode size={18} /> Itens da NF-e pelo código de barras</h3>
+      <p className="mt-1 text-muted">{enabled
+        ? 'Ativa: ao ler o DANFE, o sistema busca o XML da nota na Focus NFe (manifestação do destinatário) e traz os itens.'
+        : 'Opcional. Com uma conta na Focus NFe (CNPJ do restaurante e certificado digital cadastrados), o XML é buscado só com a leitura do DANFE. Sem ela, o sistema pede o arquivo XML e confere a chave.'}</p>
+      <div className="mt-2 flex flex-wrap gap-2"><input className="input max-w-md font-mono" type="password" autoComplete="off" placeholder={enabled ? 'manter o token atual' : 'token da Focus NFe'} value={token} onChange={(e) => setToken(e.target.value)} />
+        <button className="btn-ghost" disabled={!token} onClick={() => save(token)}>Salvar token</button>
+        {enabled && <button className="btn-ghost" onClick={() => save('')}>Desligar</button>}</div>
+    </div>
+  );
+}
+
+/** Pedido de compra para o fornecedor, com o código de barras que dá entrada no estoque quando a mercadoria chega. */
+function printPurchase(x, companyName) {
+  const w = window.open('', '_blank', 'width=820,height=900');
+  if (!w) return false;
+  const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const rows = x.lines.map((l) => `<tr><td>${esc(l.name)}</td><td class="n">${esc(qfmt(l.qty, l.unit))}</td><td class="n">${esc(money(Math.round(Number(l.unit_cost_cents))))}</td><td class="n">${esc(money(Math.round(Number(l.qty) * Number(l.unit_cost_cents))))}</td></tr>`).join('');
+  w.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Pedido de compra ${x.id}</title><style>
+    body{font:14px system-ui,sans-serif;margin:32px;color:#111} h1{font-size:22px;margin:0} table{width:100%;border-collapse:collapse;margin-top:16px}
+    th,td{border-bottom:1px solid #ccc;padding:6px;text-align:left} .n{text-align:right} .bc{margin-top:24px;text-align:center} .bc div{font:16px monospace;letter-spacing:2px}
+    .muted{color:#555}</style></head><body>
+    <h1>Pedido de compra nº ${x.id}</h1><div class="muted">${esc(companyName)} · ${esc(new Date(x.created_at).toLocaleDateString('pt-BR'))}</div>
+    <p><b>Fornecedor:</b> ${esc(x.supplier)}${x.document ? ` · ${esc(x.document)}` : ''}${x.due_date ? ` · vencimento ${esc(x.due_date.split('-').reverse().join('/'))}` : ''}</p>
+    <table><thead><tr><th>Item</th><th class="n">Qtd</th><th class="n">R$ unit.</th><th class="n">Total</th></tr></thead><tbody>${rows}</tbody>
+    <tfoot><tr><th colspan="3" class="n">Total</th><th class="n">${esc(money(x.total_cents))}</th></tr></tfoot></table>
+    <div class="bc">${code128Svg(x.code)}<div>${esc(x.code)}</div><p class="muted">Na entrega, leia este código no RUSTEN (Estoque › Lançar nota) para dar entrada.</p></div>
+    <p class="muted" style="text-align:center">Se a impressão não abrir sozinha, use Ctrl+P.</p></body></html>`);
+  w.document.close();
+  setTimeout(() => { try { w.focus(); w.print(); } catch { /* usuário imprime pelo botão */ } }, 300);
+  return true;
+}
+
 // ---- Lançar nota: foto (lida por IA) ou XML da NF-e → conferência → entrada no estoque ----
 async function shrink(file) {
   if (file.type === 'application/pdf') {
@@ -654,7 +791,7 @@ function parseNfe(xml) {
     const p = det.getElementsByTagName('prod')[0];
     return { description: g(p, 'xProd'), qty: Number(g(p, 'qCom')), unit: g(p, 'uCom'), unit_price: Number(g(p, 'vUnCom')), total: Number(g(p, 'vProd')) };
   }).filter((i) => i.description);
-  return { supplier: g(emit, 'xFant') || g(emit, 'xNome'), document: g(d, 'nNF') ? `NF-e ${g(d, 'nNF')}` : null, nfe_key: /^\d{44}$/.test(key) ? key : null,
+  return { supplier_doc: g(emit, 'CNPJ') || g(emit, 'CPF'), supplier: g(emit, 'xFant') || g(emit, 'xNome'), document: g(d, 'nNF') ? `NF-e ${g(d, 'nNF')}` : null, nfe_key: /^\d{44}$/.test(key) ? key : null,
     due_date: g(d.getElementsByTagName('dup')[0], 'dVenc'), total: Number(g(d.getElementsByTagName('ICMSTot')[0], 'vNF')) || null, items, warnings: [] };
 }
 
@@ -683,10 +820,38 @@ function NoteImport({ stock, onDone }) {
     const f = e.target.files[0]; e.target.value = ''; if (!f) return;
     setErr(null); setDoc(null); setPreview(null); setBusy('Lendo o XML…');
     try {
-      const n = parseNfe(await f.text());
-      const r = await api('/api/stock/notes/match', { method: 'POST', body: { items: n.items } });
-      setDoc({ ...n, source: 'xml', lines: toLines(r.items) });
+      await loadXml(await f.text());
     } catch (x) { setErr(x); } finally { setBusy(null); }
+  };
+  // XML (arquivo ou buscado pela chave) → itens reconhecidos pelos apelidos aprendidos → conferência
+  const loadXml = async (text, expectKey = waitKey?.key) => {
+    const n = parseNfe(text);
+    if (expectKey && n.nfe_key && n.nfe_key !== expectKey) throw new Error('Este XML é de outra nota: a chave não confere com o código lido.');
+    const r = await api('/api/stock/notes/match', { method: 'POST', body: { items: n.items } });
+    const warnings = [...(n.warnings || [])];
+    if (waitKey?.supplier && !n.supplier) n.supplier = waitKey.supplier;
+    setWaitKey(null);
+    setDoc({ ...n, source: 'xml', warnings, lines: toLines(r.items) });
+  };
+  const [waitKey, setWaitKey] = useState(null);
+  const [po, setPo] = useState(null);
+  const onBarcode = async (r) => {
+    setErr(null); setPo(null); setWaitKey(null);
+    if (r.kind === 'pedido') {
+      if (['recebida', 'cancelada'].includes(r.purchase.status)) { setErr(new Error(`Pedido de compra #${r.purchase.id} já está ${r.purchase.status}.`)); return; }
+      setPo(r.purchase); return;
+    }
+    if (r.duplicate) { setErr(new Error(`Esta NF-e já foi lançada (compra #${r.duplicate}).`)); return; }
+    if (r.xml_by_key) {
+      setBusy('Buscando o XML da nota pela chave…');
+      try {
+        const x = await api('/api/stock/notes/xml-by-key', { method: 'POST', body: { key: r.key } });
+        if (x.xml) { await loadXml(x.xml, r.key); return; }
+        setWaitKey({ ...r, message: x.message });
+      } catch (x) { setWaitKey({ ...r, message: x.message }); } finally { setBusy(null); }
+      return;
+    }
+    setWaitKey({ ...r, message: 'Para trazer os itens, importe o XML desta nota (o arquivo que o fornecedor envia por e-mail). A chave é conferida.' });
   };
   const blankLine = () => ({ description: '', alias: '', match: 'novo', note_unit: '', qty: '1', factor: '1', cost: '', target: stock[0] ? String(stock[0].id) : 'novo', new_name: '', new_unit: 'un', manual: true });
   const manual = () => { setErr(null); setPreview(null); setDoc({ supplier: '', document: '', due_date: '', source: 'manual', warnings: [], total: null, lines: [blankLine()] }); };
@@ -697,7 +862,7 @@ function NoteImport({ stock, onDone }) {
     setErr(null); setBusy('Lançando no estoque…');
     try {
       const r = await api('/api/stock/notes/confirm', { method: 'POST', body: { supplier: doc.supplier || '', document: doc.document || null, due_date: doc.due_date || null,
-        source: doc.source, nfe_key: doc.nfe_key || null, receive: true,
+        source: doc.source, nfe_key: doc.nfe_key || null, supplier_doc: /^\d{11}$|^\d{14}$/.test(doc.supplier_doc || '') ? doc.supplier_doc : null, receive: true,
         lines: doc.lines.map((l) => ({ description: l.description || (l.target !== 'novo' ? stock.find((x) => String(x.id) === l.target)?.name : l.new_name) || 'item', alias: l.alias, qty: num(l.qty), factor: num(l.factor) || 1, unit_cost_cents: parseCents(l.cost || '0') ?? 0,
           stock_item_id: l.target !== 'novo' ? Number(l.target) : null, new_item: l.target === 'novo' ? { name: l.new_name, unit: l.new_unit } : null })) } });
       toast(`Compra #${r.purchase_id} lançada: ${r.lines} item(ns) entraram no estoque`); setDoc(null); setPreview(null); onDone();
@@ -706,7 +871,20 @@ function NoteImport({ stock, onDone }) {
   if (!s.can('compras.gerenciar')) return <Empty icon={Camera} title="Sem permissão">Peça ao gerente o perfil com "Registrar compras e recebimentos".</Empty>;
   return (
     <div className="space-y-4">
-      {!doc && (
+      {!doc && !po && <BarcodeEntry busy={!!busy} onResult={onBarcode} onError={setErr} />}
+      {waitKey && !doc && (
+        <div className="card border-copper/50 p-4 text-sm" data-note-waitkey>
+          <div className="font-semibold">NF-e {waitKey.info.number} · série {waitKey.info.series} · {waitKey.info.uf} {waitKey.info.issued.split('-').reverse().join('/')}{waitKey.supplier ? ` · ${waitKey.supplier}` : ` · CNPJ ${waitKey.info.cnpj}`}</div>
+          <p className="mt-1 text-muted">{waitKey.message}</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <label className="btn-primary cursor-pointer"><FileCode2 size={16} /> Importar XML desta nota<input type="file" accept=".xml,text/xml,application/xml" className="sr-only" onChange={xml} /></label>
+            {waitKey.xml_by_key && <button className="btn-ghost" onClick={() => onBarcode(waitKey)}>Buscar de novo</button>}
+            <button className="btn-ghost" onClick={() => setWaitKey(null)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+      {po && <ReceiveByCode purchase={po} onClose={() => setPo(null)} onDone={(st) => { setPo(null); toast(`Pedido #${po.id} ${st === 'recebida' ? 'recebido' : 'recebido em parte'}: estoque e custo médio atualizados`); onDone(); }} />}
+      {!doc && !po && (
         <div className="grid gap-3 md:grid-cols-3">
           <label className={`card flex cursor-pointer flex-col items-center gap-2 p-6 text-center hover:border-copper ${!status.data?.photo ? 'opacity-60' : ''}`}>
             <Camera size={36} className="text-copper" />
@@ -788,6 +966,7 @@ function NoteImport({ stock, onDone }) {
             <button className="btn-ghost" disabled={!key} onClick={saveKey}>Salvar chave</button></div>
         </div>
       )}
+      {status.data && s.can('configuracoes.gerenciar') && !doc && <FocusTokenCard enabled={status.data.xml_by_key} onSaved={status.reload} />}
     </div>
   );
 }

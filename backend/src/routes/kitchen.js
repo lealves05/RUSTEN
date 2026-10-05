@@ -152,8 +152,8 @@ router.get('/stats', need('cozinha.operar'), h(async (req, res) => {
 
 /* Painel da TV (retirada): pedidos em preparo e prontos, por setor (Cozinha, Bar…) e por comanda/mesa/pedido.
    Mostra só número, primeiro nome e itens — nada de valores. `version` muda a cada evento da cozinha.
-   Comanda já paga (encerrada) continua no painel enquanto houver item a retirar — ex.: paga no caixa e espera o drink —
-   por até 6 horas depois do fechamento. */
+   Mostra o mesmo que a fila da Cozinha (sem limite de tempo para comanda aberta). Comanda já paga (encerrada) continua
+   enquanto houver item a retirar por até 6 horas depois do fechamento; e qualquer pedido chamado na TV aparece por 15 minutos. */
 router.get('/board', anyOf('pdv.lancar', 'cozinha.operar'), h(async (req, res) => {
   const unit = req.ctx.terminalUnitId || req.ctx.unitId;
   const params = [req.ctx.companyId];
@@ -171,9 +171,11 @@ router.get('/board', anyOf('pdv.lancar', 'cozinha.operar'), h(async (req, res) =
       from order_items i join consumption_sessions s on s.id = i.session_id
       left join production_sectors ps on ps.id = i.sector_id
       left join tab_cards c on c.id = s.card_id left join dining_tables t on t.id = s.table_id left join delivery_orders d on d.session_id = s.id
-     where i.company_id = $1${unitF} and i.status = 'ativo' and i.sent_at is not null and i.sent_at > now() - interval '24 hours'
+     where i.company_id = $1${unitF} and i.status = 'ativo' and i.sent_at is not null
        and i.kitchen_status in ('novo','aceito','preparando','pronto')
-       and (s.status in ('aberta','em_fechamento') or (s.status = 'encerrada' and s.closed_at > now() - interval '6 hours'))
+       and (s.status in ('aberta','em_fechamento') or (s.status = 'encerrada' and s.closed_at > now() - interval '6 hours')
+            or exists (select 1 from kitchen_events e3 join order_items i3 on i3.id = e3.item_id
+                        where i3.session_id = s.id and e3.to_status = 'chamado' and e3.created_at > now() - interval '15 minutes'))
        and coalesce(d.status, '') not in ('saiu','entregue','cancelado')
      group by s.id, c.number, t.number, d.number, d.mode, i.sector_id, ps.name
      order by min(i.sent_at)
@@ -212,7 +214,7 @@ router.post('/sessions/:id/call', anyOf('pdv.lancar', 'cozinha.operar'), h(async
   const b = parse(z.object({ sector_ids: z.array(z.number().int()).max(20).optional() }), req.body || {});
   const its = (await q(`select distinct on (i.sector_id) i.id, i.kitchen_status, i.sector_id from order_items i join consumption_sessions s on s.id = i.session_id
       where i.session_id = $1 and i.company_id = $2 and i.status = 'ativo' and i.sent_at is not null and i.kitchen_status in ('novo','aceito','preparando','pronto')
-        and (s.status in ('aberta','em_fechamento') or (s.status = 'encerrada' and s.closed_at > now() - interval '6 hours'))
+        and s.status <> 'cancelada'
         ${b.sector_ids?.length ? 'and i.sector_id = any($3)' : ''}
       order by i.sector_id, (i.kitchen_status = 'pronto') desc, i.id desc`,
   b.sector_ids?.length ? [Number(req.params.id), req.ctx.companyId, b.sector_ids] : [Number(req.params.id), req.ctx.companyId])).rows;

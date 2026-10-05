@@ -1164,6 +1164,29 @@ await check('painel da TV: separa por setor, mantém comanda paga com item a ret
   await apiC('POST', `/api/kitchen/items/${a.item.id}/status`, { to: 'pronto' });
   await apiC('POST', `/api/kitchen/items/${a.item.id}/status`, { to: 'entregue' });
 });
+await check('painel da TV: pedido antigo pronto (dias) aparece e é chamado; comanda fechada há muito aparece ao ser chamada', async () => {
+  const p = bProducts.find((x) => x.sector_id && !x.groups?.length) || bProducts.find((x) => x.sector_id);
+  const s = (await apiC('POST', '/api/pdv/sessions', { kind: 'balcao', customer_name: 'Antigo Teste' })).data;
+  const it = (await apiC('POST', '/api/pdv/items', { session_id: s.id, product_id: p.id, launch_mode: 'manual', idempotency_key: key(),
+    ...(p.groups?.length ? { option_ids: [p.groups[0].options[0].id] } : {}) })).data.item;
+  await apiC('POST', `/api/kitchen/items/${it.id}/status`, { to: 'pronto' });
+  await pool.query("update order_items set sent_at = now() - interval '4 days', ready_at = now() - interval '4 days' where id = $1", [it.id]);
+  const has = async () => (await apiC('GET', '/api/kitchen/board')).data.orders.find((o) => o.id === s.id);
+  assert.ok(await has(), 'pedido de 4 dias continua no painel (igual à fila da cozinha)');
+  const c = await apiC('POST', `/api/kitchen/sessions/${s.id}/call`, {});
+  assert.equal(c.status, 200, JSON.stringify(c.data));
+  assert.ok((await has()).called_at);
+  // comanda fechada há dias: some do painel, mas volta por 15 minutos se for chamada
+  const full = (await apiC('GET', `/api/pdv/sessions/${s.id}`)).data;
+  await apiC('POST', `/api/pdv/sessions/${s.id}/payments`, { method: 'pix', amount_cents: full.totals.balance, idempotency_key: key() });
+  await apiC('POST', `/api/pdv/sessions/${s.id}/close`, { version: (await apiC('GET', `/api/pdv/sessions/${s.id}`)).data.version });
+  await pool.query("update consumption_sessions set closed_at = now() - interval '3 days' where id = $1", [s.id]);
+  await pool.query("update kitchen_events set created_at = now() - interval '1 hour' where item_id = $1", [it.id]);
+  assert.ok(!(await has()), 'fechada há dias e sem chamada recente: fora do painel');
+  assert.equal((await apiC('POST', `/api/kitchen/sessions/${s.id}/call`, {})).status, 200);
+  assert.ok(await has(), 'chamada recente traz de volta ao painel');
+  await apiC('POST', `/api/kitchen/items/${it.id}/status`, { to: 'entregue' });
+});
 await check('cozinha: recusar tira da fila e do painel da TV, mas mantém o item (e o valor) na comanda', async () => {
   const p = bProducts.find((x) => x.sector_id && !x.groups?.length) || bProducts.find((x) => x.sector_id);
   const s = (await apiC('POST', '/api/pdv/sessions', { kind: 'balcao', customer_name: 'Recusa Teste' })).data;

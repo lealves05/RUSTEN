@@ -2269,9 +2269,11 @@ l(async(e,a)=>{let t=(await d(`select ps.name as sector, count(*)::int as items,
       from order_items i join consumption_sessions s on s.id = i.session_id
       left join production_sectors ps on ps.id = i.sector_id
       left join tab_cards c on c.id = s.card_id left join dining_tables t on t.id = s.table_id left join delivery_orders d on d.session_id = s.id
-     where i.company_id = $1${o} and i.status = 'ativo' and i.sent_at is not null and i.sent_at > now() - interval '24 hours'
+     where i.company_id = $1${o} and i.status = 'ativo' and i.sent_at is not null
        and i.kitchen_status in ('novo','aceito','preparando','pronto')
-       and (s.status in ('aberta','em_fechamento') or (s.status = 'encerrada' and s.closed_at > now() - interval '6 hours'))
+       and (s.status in ('aberta','em_fechamento') or (s.status = 'encerrada' and s.closed_at > now() - interval '6 hours')
+            or exists (select 1 from kitchen_events e3 join order_items i3 on i3.id = e3.item_id
+                        where i3.session_id = s.id and e3.to_status = 'chamado' and e3.created_at > now() - interval '15 minutes'))
        and coalesce(d.status, '') not in ('saiu','entregue','cancelado')
      group by s.id, c.number, t.number, d.number, d.mode, i.sector_id, ps.name
      order by min(i.sent_at)
@@ -2285,7 +2287,7 @@ re"),a.json({now:new Date().toISOString(),version:String(r),areas:u,orders:i.map
 {sector_ids:ee.array(ee.number().int()).max(20).optional()}),e.body||{}),n=(await d(`select distinct on (i.sector_id) i.id, i.kitchen_status, i.sector_id from order_items i join co\
 nsumption_sessions s on s.id = i.session_id
       where i.session_id = $1 and i.company_id = $2 and i.status = 'ativo' and i.sent_at is not null and i.kitchen_status in ('novo','aceito','preparando','pronto')
-        and (s.status in ('aberta','em_fechamento') or (s.status = 'encerrada' and s.closed_at > now() - interval '6 hours'))
+        and s.status <> 'cancelada'
         ${t.sector_ids?.length?"and i.sector_id = any($3)":""}
       order by i.sector_id, (i.kitchen_status = 'pronto') desc, i.id desc`,t.sector_ids?.length?[Number(e.params.id),e.ctx.companyId,t.sector_ids]:[Number(e.params.id),e.ctx.companyId])).
 rows;if(!n.length)throw g("Este pedido n\xE3o est\xE1 mais no painel","nothing_to_call");let o=null;for(let i of n)o=(await d("insert into kitchen_events (company_id, item_id, from\

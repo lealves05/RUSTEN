@@ -8,3 +8,4 @@ dist/
 !frontend/.env.production
 !frontend/.env.cloudflare
 .wrangler/
+backend/supabase/functions/rusten-api-cf/

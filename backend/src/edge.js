@@ -18,5 +18,6 @@ app.use(async (_req, res, next) => {
     res.status(503).json({ error: 'Serviço iniciando. Tente novamente em instantes.' });
   }
 });
-app.use(env.PATH_PREFIX, createApp());
+// rusten-api (site anterior) ou rusten-api-cf (site na Cloudflare, pacote embutido)
+app.use([`${env.PATH_PREFIX}-cf`, env.PATH_PREFIX], createApp());
 app.listen(8000);

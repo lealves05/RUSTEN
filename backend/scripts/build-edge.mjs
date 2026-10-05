@@ -60,3 +60,22 @@ await import('data:text/javascript;charset=utf-8,' + encodeURIComponent(code));
 `;
 fs.writeFileSync(new URL('../edge/loader.ts', import.meta.url), loader);
 console.log(`pacote publicado em frontend/public/edge/rusten-api.js (${(bundle.length / 1024).toFixed(0)} KB) e carregadora em edge/loader.ts`);
+
+// Função com o pacote embutido para o site na Cloudflare ("rusten-api-cf"): inicia sem baixar nada de outro site.
+// Publicar: npx supabase functions deploy rusten-api-cf --project-ref <ref> --no-verify-jwt --use-api
+{
+  const { gzipSync } = await import('node:zlib');
+  const packed = gzipSync(bundle, { level: 9 }).toString('base64');
+  const fnDir = new URL('../supabase/functions/rusten-api-cf/', import.meta.url);
+  fs.mkdirSync(fnDir, { recursive: true });
+  fs.writeFileSync(new URL('index.ts', fnDir), `// RUSTEN API (site na Cloudflare) — gerado por scripts/build-edge.mjs. Não edite: rode o build de novo.
+// Edge Function "rusten-api-cf" com verify_jwt = false (a API faz a própria autenticação).
+${deps.map((d) => `import 'npm:${d}@${version(d)}';`).join('\n')}
+
+const PACKED = '${packed}';
+const bytes = Uint8Array.from(atob(PACKED), (c) => c.charCodeAt(0));
+const source = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+await import('data:text/javascript;charset=utf-8,' + encodeURIComponent(source));
+`);
+  console.log(`supabase/functions/rusten-api-cf/index.ts (${(packed.length / 1024).toFixed(0)} KB) pronto.`);
+}

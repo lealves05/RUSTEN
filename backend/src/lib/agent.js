@@ -1,7 +1,7 @@
 // Agente de atendimento (WhatsApp): regras determinísticas — cardápio, preços, horário, pedido com resumo e confirmação,
 // status de pedido (identidade pelo número do WhatsApp), reservas e encaminhamento à equipe.
 // O simulador usa o mesmo motor, mas nunca cria pedidos ou reservas reais.
-import { q, randomToken } from './core.js';
+import { q, tx, randomToken } from './core.js';
 import { deliveryConfig, createDeliveryOrder, priceCart, STATUS_LABEL } from './delivery.js';
 import { onlyDigits } from './customers.js';
 
@@ -122,8 +122,8 @@ export async function agentReply(company, conv, text, { simulated }) {
     if (!has(t, 'confirmar', 'confirmo', 'sim', 'pode', 'ok')) return { replies: ['Responda *confirmar* para enviar o pedido ou *cancelar*.'], state: st };
     if (simulated) return { replies: ['✅ (Simulação) Pedido montado corretamente. Nada foi enviado à cozinha nem registrado nas vendas.'], state: { step: null } };
     try {
-      const o = await createDeliveryOrder({ query: q }, company.id, { channel: 'whatsapp', mode: st.mode, customer_name: st.name, phone: conv.contact,
-        address: st.address, cart: st.cart, client_key: `wa${conv.id}x${randomToken(6)}` }, null);
+      const o = await tx((db) => createDeliveryOrder(db, company.id, { channel: 'whatsapp', mode: st.mode, customer_name: st.name, phone: conv.contact,
+        address: st.address, cart: st.cart, client_key: `wa${conv.id}x${randomToken(6)}` }, null));
       return { replies: [`✅ Pedido *#${o.number}* recebido! Total ${brl(o.total)}. Avisaremos quando for confirmado. Para acompanhar, digite *status*.`], state: { step: null } };
     } catch (e) {
       return { replies: [`Não consegui registrar o pedido: ${e.message}`], state: { step: null } };

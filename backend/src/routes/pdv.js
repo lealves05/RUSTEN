@@ -318,12 +318,15 @@ router.post('/items/transfer', need('pdv.transferir_item'), h(async (req, res) =
 }));
 
 async function transferItems(db, ctx, itemIds, targetId, reason) {
-  const items = (await db.query(`select * from order_items where id = any($1) and company_id = $2 and status = 'ativo'`, [itemIds, ctx.companyId])).rows;
-  if (items.length !== new Set(itemIds).size) throw bad('Itens inválidos ou já cancelados');
-  const sourceIds = [...new Set(items.map((i) => Number(i.session_id)))];
-  const ids = [...sourceIds, targetId].sort((a, b) => a - b); // ordem fixa evita impasse entre terminais
+  const pre = (await db.query(`select id, session_id from order_items where id = any($1) and company_id = $2 and status = 'ativo'`, [itemIds, ctx.companyId])).rows;
+  if (pre.length !== new Set(itemIds).size) throw bad('Itens inválidos ou já cancelados');
+  const sourceIds = [...new Set(pre.map((i) => Number(i.session_id)))];
+  const ids = [...new Set([...sourceIds, targetId])].sort((a, b) => a - b); // ordem fixa evita impasse entre terminais
   const locked = {};
   for (const id of ids) locked[id] = await lockSession(db, ctx.companyId, id);
+  // releitura com trava: outra tela pode ter transferido/cancelado o mesmo item enquanto esperávamos
+  const items = (await db.query(`select * from order_items where id = any($1) and company_id = $2 and status = 'ativo' order by id for update`, [itemIds, ctx.companyId])).rows;
+  if (items.length !== pre.length) throw conflict('Itens já transferidos ou cancelados em outro terminal. Atualize e confira.', 'items_changed');
   const target = locked[targetId];
   assertOpen(target);
   for (const sid of sourceIds) {
@@ -355,13 +358,16 @@ async function transferItems(db, ctx, itemIds, targetId, reason) {
 router.post('/sessions/:id/merge', need('pdv.transferir_item'), h(async (req, res) => {
   const b = parse(z.object({ target_session_id: z.number().int(), reason: z.string().trim().min(3).max(200) }), req.body);
   const id = Number(req.params.id);
+  if (Number(b.target_session_id) === id) throw bad('Escolha um destino diferente da origem');
   res.json(await tx(async (db) => {
+    // trava origem e destino (ordem por id) antes de ler os itens: lançamento simultâneo na origem
+    // ou entra antes e é levado junto, ou espera e é recusado (consumo cancelado)
+    for (const sid of [id, Number(b.target_session_id)].sort((x, y) => x - y)) assertOpen(await lockSession(db, req.ctx.companyId, sid));
     const items = (await db.query(`select id from order_items where session_id = $1 and company_id = $2 and status = 'ativo'`, [id, req.ctx.companyId])).rows.map((r) => r.id);
     if (!items.length) throw bad('Consumo sem itens para juntar');
     const paid = await db.query("select 1 from payments where session_id = $1 and status = 'confirmado'", [id]);
     if (paid.rows[0]) throw conflict('Consumo com pagamento registrado não pode ser juntado; transfira os itens restantes', 'has_payments');
     const r = await transferItems(db, req.ctx, items, b.target_session_id, b.reason);
-    if (Number(b.target_session_id) === id) throw bad('Escolha um destino diferente da origem');
     const src = (await db.query('select table_id, customer_name from consumption_sessions where id = $1', [id])).rows[0];
     await db.query("update consumption_sessions set status = 'cancelada', closed_at = now(), closed_by = $2, label = coalesce(label,'') || ' (juntada)' where id = $1", [id, req.ctx.userId]);
     // destino sem nome herda o nome do cliente da origem; mesa da origem fica livre se não sobrou consumo nela
@@ -506,7 +512,9 @@ export async function openCashFor(db, ctx, unitId) {
   let where = "company_id = $1 and status = 'aberto'";
   if (ctx.terminalId) { params.push(ctx.terminalId); where += ` and terminal_id = $${params.length}`; }
   else { params.push(ctx.userId, unitId); where += ` and user_id = $${params.length - 1} and unit_id = $${params.length} and terminal_id is null`; }
-  return (await db.query(`select * from cash_sessions where ${where} order by id desc limit 1`, params)).rows[0];
+  // FOR SHARE: o fechamento (FOR UPDATE) espera os recebimentos em andamento, e um recebimento que esperou
+  // o fechamento relê a linha, não a encontra mais aberta e é recusado (cash_closed)
+  return (await db.query(`select * from cash_sessions where ${where} order by id desc limit 1 for share`, params)).rows[0];
 }
 
 const payInput = z.object({
@@ -527,7 +535,7 @@ router.post('/sessions/:id/payments', need('pdv.receber'), h(async (req, res) =>
     if (!['aberta', 'em_fechamento'].includes(s.status)) throw conflict('Consumo encerrado', 'session_not_open');
     const st = await pdvSettings(db, ctx, s.unit_id);
     const cash = await openCashFor(db, ctx, s.unit_id);
-    if (!cash && st.require_open_cash) throw conflict('Abra o caixa antes de receber', 'cash_closed');
+    if (!cash && st.require_open_cash) throw conflict('Caixa fechado: abra o caixa antes de receber', 'cash_closed');
     const t = await sessionTotals(db, s.id);
     if (b.amount_cents > t.balance) throw bad(`Valor maior que o saldo (${(t.balance / 100).toFixed(2)})`, 'over_balance');
     let change = 0;

@@ -69,6 +69,9 @@ export async function createDeliveryOrder(db, companyId, input, actor) {
   if (input.mode === 'entrega' && (!input.address?.street || !input.address?.number)) throw bad('Informe rua e número para entrega');
   const phone = onlyDigits(input.phone);
   if (phone.length < 10) throw bad('Telefone com DDD é obrigatório');
+  // Pedidos da mesma empresa em fila (até o fim da transação): numeração sequencial sem colisão e reenvio
+  // da mesma chave devolvendo o pedido já gravado, mesmo com toques/clientes simultâneos.
+  await db.query("select pg_advisory_xact_lock(hashtext('delivery-orders:' || $1::text))", [companyId]);
   const dup = (await db.query('select id, public_token, number from delivery_orders where company_id = $1 and client_key = $2', [companyId, input.client_key])).rows[0];
   if (dup) return { replay: true, ...dup };
 

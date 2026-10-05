@@ -15,14 +15,16 @@ set "WT=%~dp0..\_cloudflare\RUSTEN"
 set "KEYS=%USERPROFILE%\.plataforma-cloudflare"
 set "LOG=%~dp0publicar-cloudflare.log"
 if exist "%~dp0..\node-v24.20.0-win-x64\node.exe" set "PATH=%~dp0..\node-v24.20.0-win-x64;%PATH%"
-rem o npm global deste Windows esta corrompido: usa o npm que vem com o Node portatil
-set "NODEDIR=%~dp0..\node-v24.20.0-win-x64"
-if not exist "%NODEDIR%\node.exe" set "NODEDIR="
-if defined NODEDIR set "NPM_CONFIG_PREFIX=%NODEDIR%"
+rem o npm global deste Windows esta corrompido: npm/npx passam a chamar direto o npm que vem junto com o Node
+set "NODEDIR="
+for %%D in ("%~dp0..\node-v24.20.0-win-x64" "%~dp0..\node-v24.20.0-win-x64\node-v24.20.0-win-x64") do if not defined NODEDIR if exist "%%~D\node_modules\npm\bin\npm-cli.js" set "NODEDIR=%%~D"
+if not defined NODEDIR for /f "delims=" %%N in ('where node 2^>nul') do if not defined NODEDIR if exist "%%~dpNnode_modules\npm\bin\npm-cli.js" set "NODEDIR=%%~dpN."
 if defined NODEDIR if not exist "%TEMP%\npm-shim" mkdir "%TEMP%\npm-shim"
 if defined NODEDIR >"%TEMP%\npm-shim\npm.cmd" echo @"%NODEDIR%\node.exe" "%NODEDIR%\node_modules\npm\bin\npm-cli.js" %%*
 if defined NODEDIR >"%TEMP%\npm-shim\npx.cmd" echo @"%NODEDIR%\node.exe" "%NODEDIR%\node_modules\npm\bin\npx-cli.js" %%*
 if defined NODEDIR set "PATH=%TEMP%\npm-shim;%NODEDIR%;%PATH%"
+if not defined NODEDIR echo   Aviso: npm do Node nao encontrado; usando o npm do sistema.
+if defined NODEDIR echo   Node usado: %NODEDIR%
 echo [%date% %time%] inicio > "%LOG%"
 where git >nul 2>nul || (echo Git nao encontrado. Instale em https://git-scm.com/download/win & pause & exit /b 1)
 where node >nul 2>nul || (echo Node nao encontrado. & pause & exit /b 1)

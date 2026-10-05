@@ -11,6 +11,7 @@ import {
 } from '../lib/platform.js';
 import { settingsManifest, getSystemParams, setSystemParams, getTenantParams, setTenantParams } from '../lib/params.js';
 import { env } from '../lib/env.js';
+import { normalizePlans } from '../lib/plans.js';
 
 // =====================================================================
 // Central → RUSTEN (/api/platform/v1): chamadas assinadas
@@ -139,7 +140,7 @@ accessRouter.get('/billing', h(async (req, res) => {
   if (!req.ctx.can('assinatura.gerenciar')) return res.json({ access: req.ctx.access, restricted: true, hub: true });
   const out = await hubCall('GET', `/tenants/${rid(req)}/billing`);
   if (out.access) await storeAccess(req.ctx.companyId, out.access);
-  res.json({ ...out, hub: true });
+  res.json({ ...out, plans: normalizePlans(out.plans), hub: true });
 }));
 
 accessRouter.post('/billing/checkout', need('assinatura.gerenciar'), demoGuard, h(async (req, res) => {

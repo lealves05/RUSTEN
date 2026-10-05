@@ -79,7 +79,8 @@ export default function Register() {
               <label key={p.code} className={`card flex cursor-pointer items-start gap-3 p-3 ${f.plan.code === p.code ? 'border-copper ring-2 ring-copper/30' : ''}`}>
                 <input type="radio" name="plan" checked={f.plan.code === p.code} onChange={() => set('plan', 'code', p.code)} className="mt-1" />
                 <div className="flex-1"><div className="font-semibold">{p.name}</div><div className="text-sm text-muted">{p.description}</div></div>
-                <div className="text-right text-sm">{p.monthly_cents != null && <div>{money(p.monthly_cents)}/mês</div>}{p.yearly_cents != null && <div className="text-muted">{money(p.yearly_cents)}/ano</div>}</div>
+                <div className="text-right text-sm">{p.monthly_cents != null && <div>{money(p.monthly_cents)}/mês</div>}{p.yearly_cents != null && <div className="text-muted">{money(p.yearly_cents)}/ano</div>}
+                  {p.annual_savings_pct > 0 && <div className="text-xs text-ok">anual: {p.annual_savings_pct}% a menos que 12 mensalidades</div>}</div>
               </label>
             ))}
             <div className="flex gap-3 text-sm">
@@ -87,6 +88,7 @@ export default function Register() {
               <label><input type="radio" checked={f.plan.cycle === 'anual'} onChange={() => set('plan', 'cycle', 'anual')} /> Anual</label>
             </div>
             {plans.trial && <Toggle checked={f.plan.trial} onChange={(v) => set('plan', 'trial', v)} label={`Começar pelo período de teste${plans.trial_days ? ` (${plans.trial_days} dias)` : ''}`} />}
+            {plans.trial_label && <p className="text-xs text-muted">{plans.trial_label}. A cobrança só começa quando você contratar em Configurações › Assinatura.</p>}
           </div>
         ) : (
           <div className="card stripe p-4 text-sm">

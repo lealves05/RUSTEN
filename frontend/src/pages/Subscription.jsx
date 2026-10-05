@@ -19,7 +19,9 @@ const PAY_LABEL = { PENDING: 'Pendente', CONFIRMED: 'Pago', OVERDUE: 'Vencido', 
 const CYCLE = { MONTHLY: 'Mensal', ANNUAL: 'Anual' };
 const TRIAL = { '15_DAYS': '15 dias', '30_DAYS': '30 dias', UNLIMITED: 'Sem prazo', CUSTOM: 'Personalizado' };
 const REASON = { ADMINISTRATIVO: 'Bloqueio administrativo', FINANCEIRO: 'Pendência financeira', TRIAL_EXPIRADO: 'Período de teste encerrado', CANCELAMENTO: 'Assinatura cancelada' };
-const priceFor = (p, cycle) => Number(cycle === 'ANNUAL' ? p?.annual_price : p?.monthly_price) || 0;
+// preços em centavos vindos da API (R01); ciclo sem preço = indisponível
+const priceFor = (p, cycle) => Number(cycle === 'ANNUAL' ? p?.yearly_cents : p?.monthly_cents) || 0;
+const cents = (v) => (v == null ? '—' : brl.format(Number(v) / 100));
 const openCheckout = (url) => { if (url && /^https:\/\//.test(url)) window.location.assign(url); };
 
 export function StatusBadge({ status }) {
@@ -46,8 +48,9 @@ function PlanPicker({ plans, value, cycle, onChange, onCycle }) {
               className={`card p-4 text-left transition disabled:opacity-50 ${value === p.id ? 'border-copper ring-2 ring-copper/30' : 'hover:border-copper/60'}`}>
               <div className="font-semibold">{p.name}</div>
               {p.description && <p className="mt-1 text-xs text-muted">{p.description}</p>}
-              <div className="mt-3 text-lg font-semibold tabular-nums">{price ? reais(price) : 'Indisponível'}
+              <div className="mt-3 text-lg font-semibold tabular-nums">{price ? cents(price) : 'Indisponível'}
                 {!!price && <span className="text-xs font-normal text-muted">{cycle === 'ANNUAL' ? ' /ano' : ' /mês'}</span>}</div>
+              {cycle === 'ANNUAL' && !!price && p.annual_savings_pct > 0 && <p className="mt-1 text-xs text-ok">{p.annual_savings_pct}% a menos que 12 mensalidades ({cents(p.annual_savings_cents)})</p>}
               {p.max_users && <p className="mt-1 text-xs text-muted">Até {p.max_users} usuários</p>}
             </button>
           );
@@ -240,7 +243,7 @@ export default function Subscription({ standalone = false }) {
         <p className="mb-3 text-sm text-muted">{pick?.mode === 'change' ? 'O novo valor é aplicado a partir da próxima cobrança mensal.' : 'Você será levado à página segura de pagamento.'}</p>
         {pick && (pick.mode === 'change'
           ? <Field label="Novo plano"><select className="input" value={pick.plan} onChange={(e) => setPick({ ...pick, plan: e.target.value })}>
-              {plans.filter((p) => priceFor(p, 'MONTHLY')).map((p) => <option key={p.id} value={p.id}>{p.name} — {reais(p.monthly_price)}/mês</option>)}
+              {plans.filter((p) => priceFor(p, 'MONTHLY')).map((p) => <option key={p.id} value={p.id}>{p.name} — {cents(p.monthly_cents)}/mês</option>)}
             </select></Field>
           : <PlanPicker plans={plans} value={pick.plan} cycle={pick.cycle} onChange={(plan) => setPick({ ...pick, plan })} onCycle={(cycle) => setPick({ ...pick, cycle })} />)}
       </Modal>

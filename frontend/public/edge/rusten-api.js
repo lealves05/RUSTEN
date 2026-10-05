@@ -1678,6 +1678,48 @@ async function setTenantParams(db, companyId, values2) {
   return clean;
 }
 
+// src/lib/plans.js
+function toCents(v) {
+  if (v === null || v === void 0 || v === "") return null;
+  const n = typeof v === "number" ? v : Number(String(v).replace(",", "."));
+  if (!Number.isFinite(n) || n <= 0 || n > 1e7) return null;
+  return Math.round(n * 100);
+}
+function annualSavings(monthlyCents, yearlyCents) {
+  if (!monthlyCents || !yearlyCents) return null;
+  const full = monthlyCents * 12;
+  if (yearlyCents >= full) return null;
+  return { cents: full - yearlyCents, pct: Math.floor((full - yearlyCents) / full * 100) };
+}
+function normalizePlan(p) {
+  if (!p || typeof p !== "object") return null;
+  const monthly = toCents(p.monthly_price ?? (p.monthly_cents != null ? p.monthly_cents / 100 : null));
+  const yearly = toCents(p.annual_price ?? (p.yearly_cents != null ? p.yearly_cents / 100 : null));
+  const savings = annualSavings(monthly, yearly);
+  return {
+    id: p.id ?? null,
+    code: p.code ?? null,
+    name: String(p.name ?? ""),
+    description: p.description ?? null,
+    features: p.features ?? null,
+    max_users: p.max_users ?? null,
+    monthly_cents: monthly,
+    yearly_cents: yearly,
+    annual_savings_cents: savings?.cents ?? null,
+    annual_savings_pct: savings?.pct ?? null,
+    // legado (reais): mantidos enquanto houver consumidores; null quando o ciclo não tem preço
+    monthly_price: monthly == null ? null : monthly / 100,
+    annual_price: yearly == null ? null : yearly / 100
+  };
+}
+var normalizePlans = (list) => Array.isArray(list) ? list.map(normalizePlan).filter((p) => p && (p.monthly_cents || p.yearly_cents)) : [];
+function trialInfo(t) {
+  if (t === "15_DAYS") return { trial: true, trial_days: 15, trial_label: "Per\xEDodo de teste de 15 dias" };
+  if (t === "30_DAYS") return { trial: true, trial_days: 30, trial_label: "Per\xEDodo de teste de 30 dias" };
+  if (t === "UNLIMITED") return { trial: true, trial_days: null, trial_label: "Per\xEDodo de teste com prazo definido pela administra\xE7\xE3o" };
+  return { trial: false, trial_days: null, trial_label: null };
+}
+
 // src/routes/auth.js
 var router = Router();
 var COMMON = ["12345678", "senha123", "password", "qwerty", "123456789", "rusten123", "abc12345"];
@@ -1785,8 +1827,9 @@ router.get("/plans", h(async (_req, res) => {
     res.json({
       ...base2,
       hub: true,
-      plans: data.plans || [],
+      plans: normalizePlans(data.plans),
       trial_default: data.trial_default || null,
+      ...trialInfo(data.trial_default),
       signup_open: base2.signup_open && data.signup_enabled !== false
     });
   } catch {
@@ -7529,7 +7572,7 @@ accessRouter.get("/billing", h(async (req, res) => {
   if (!req.ctx.can("assinatura.gerenciar")) return res.json({ access: req.ctx.access, restricted: true, hub: true });
   const out = await hubCall("GET", `/tenants/${rid(req)}/billing`);
   if (out.access) await storeAccess(req.ctx.companyId, out.access);
-  res.json({ ...out, hub: true });
+  res.json({ ...out, plans: normalizePlans(out.plans), hub: true });
 }));
 accessRouter.post("/billing/checkout", need("assinatura.gerenciar"), demoGuard, h(async (req, res) => {
   const d = parse(z19.object({ plan_id: z19.string().uuid(), cycle: z19.enum(["MONTHLY", "ANNUAL"]) }), req.body);

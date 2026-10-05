@@ -11,6 +11,7 @@ import { seedCompany, seedDemoActivity } from '../lib/seed.js';
 import { enqueueHub, platformConfig, hubCall, registerCompany, flushOutbox } from '../lib/platform.js';
 import { getSystemParams } from '../lib/params.js';
 import { env } from '../lib/env.js';
+import { normalizePlans, trialInfo } from '../lib/plans.js';
 
 export const router = Router();
 
@@ -108,7 +109,8 @@ router.get('/plans', h(async (_req, res) => {
   if (!(await platformConfig())) return res.json({ ...base, hub: false, plans: [] });
   try {
     const data = await hubCall('GET', '/plans', undefined, 5000);
-    res.json({ ...base, hub: true, plans: data.plans || [], trial_default: data.trial_default || null,
+    // R01: preços em centavos (convertidos uma vez, aqui); ciclo sem preço fica indisponível, nunca grátis
+    res.json({ ...base, hub: true, plans: normalizePlans(data.plans), trial_default: data.trial_default || null, ...trialInfo(data.trial_default),
       signup_open: base.signup_open && data.signup_enabled !== false });
   } catch {
     res.json({ ...base, hub: true, plans: [], unavailable: true });

@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 // Gera edge/index.js (API inteira num arquivo) para a Supabase Edge Function "rusten-api".
 // Pacotes npm ficam externos como "npm:pacote@versão" (o Deno os instala); built-ins "node:*" também.
 import { build } from 'esbuild';
@@ -21,9 +22,9 @@ const npmExternal = {
 };
 
 await build({
-  entryPoints: [new URL('../src/edge.js', import.meta.url).pathname],
+  entryPoints: [fileURLToPath(new URL('../src/edge.js', import.meta.url))],
   bundle: true, format: 'esm', platform: 'node', target: 'es2022',
-  outfile: new URL('../edge/index.js', import.meta.url).pathname,
+  outfile: fileURLToPath(new URL('../edge/index.js', import.meta.url)),
   plugins: [npmExternal],
   banner: { js: '// RUSTEN API — gerado por scripts/build-edge.mjs. Não editar à mão.' },
   minify: process.argv.includes('--minify'),

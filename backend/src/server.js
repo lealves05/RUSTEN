@@ -43,7 +43,7 @@ export function createApp() {
   const origins = (env.CORS_ORIGINS || (prod ? '' : 'http://localhost:5173')).split(',').map((s) => s.trim()).filter((s) => s && (!prod || s !== '*'));
   const allowed = (o) => !o || origins.includes(o) || (!prod && (origins.includes('*') || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(o)));
   app.use(cors({ origin: (o, cb) => cb(null, allowed(o)), credentials: false, maxAge: 600,
-    allowedHeaders: ['content-type', 'authorization', 'x-terminal-id'] }));
+    allowedHeaders: ['content-type', 'authorization', 'x-terminal-id', 'x-session-mode'] }));
   // F11: respostas da API não ficam em cache (dados pessoais, financeiros e tokens)
   app.use('/api', (_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
   // Um único leitor de corpo por requisição: na Edge (Deno) o corpo só pode ser lido uma vez, e um segundo

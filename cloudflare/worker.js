@@ -5,6 +5,7 @@
 //   API_DENY        prefixos de /api recusados com 404 neste endereço   ex.: "/api/master"
 //   EXTRA_PROXY     outros prefixos encaminhados à API além de /api      ex.: "/webhooks"
 //   CRON_PATH       rota chamada pelo agendamento (Cron Trigger), com Authorization: Bearer CRON_SECRET
+//   SESSION_COOKIES nomes dos cookies de sessão repassados (ex.: "__Host-rusten_rt"); os demais cookies nunca passam
 // Segredos (wrangler secret put): EDGE_PROXY_KEY (repasse do IP real à API), CRON_SECRET (só no Master).
 // O destino é sempre API_UPSTREAM: nada que venha do navegador escolhe host, porta ou URL de destino.
 
@@ -45,6 +46,13 @@ async function proxy(request, env, url) {
     if (HOP.includes(k.toLowerCase()) || STRIP_REQ.test(k)) continue;
     headers.set(k, v);
   }
+  // só os cookies de sessão conhecidos seguem para a API (nenhum outro cookie do domínio é repassado)
+  const allowCookies = list(env.SESSION_COOKIES);
+  if (allowCookies.length) {
+    const kept = String(request.headers.get('cookie') || '').split(';').map((c) => c.trim())
+      .filter((c) => allowCookies.includes(c.slice(0, c.indexOf('='))));
+    if (kept.length) headers.set('cookie', kept.join('; '));
+  }
   const ip = request.headers.get('cf-connecting-ip');
   if (env.EDGE_PROXY_KEY && ip) {
     headers.set('x-edge-proxy-key', env.EDGE_PROXY_KEY);
@@ -65,7 +73,15 @@ async function proxy(request, env, url) {
   }
 
   const out = new Headers(upstream.headers);
-  out.delete('set-cookie'); // a API usa token no cabeçalho; cookies de outro domínio não são repassados
+  out.delete('set-cookie');
+  // F05: repassa só os cookies de sessão conhecidos, sem atributo Domain (ficam presos a este endereço)
+  if (allowCookies.length) {
+    const all = typeof upstream.headers.getSetCookie === 'function' ? upstream.headers.getSetCookie() : [];
+    for (const c of all) {
+      const name = c.slice(0, c.indexOf('=')).trim();
+      if (allowCookies.includes(name) && !/;\s*domain\s*=/i.test(c) && /;\s*secure/i.test(c) && /;\s*httponly/i.test(c)) out.append('set-cookie', c);
+    }
+  }
   for (const h of ['access-control-allow-origin', 'access-control-allow-credentials', 'server', 'x-powered-by', 'sb-gateway-version', 'sb-project-ref', 'x-served-by']) out.delete(h);
   if (!out.has('cache-control')) out.set('Cache-Control', 'no-store');
   out.set('X-Content-Type-Options', 'nosniff');

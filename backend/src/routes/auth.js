@@ -12,6 +12,7 @@ import { enqueueHub, platformConfig, hubCall, registerCompany, flushOutbox } fro
 import { getSystemParams } from '../lib/params.js';
 import { env } from '../lib/env.js';
 import { normalizePlans, trialInfo } from '../lib/plans.js';
+import { sendTokens, readRefresh, cookieMode, clearRefreshCookie } from '../lib/sessionCookie.js';
 
 export const router = Router();
 
@@ -85,7 +86,7 @@ router.post('/register', h(async (req, res) => {
   try { if (await registerCompany(out.companyId, 4000)) await q("update platform_outbox set sent_at = now() where company_id = $1 and sent_at is null", [out.companyId]); }
   catch { /* fica na outbox */ }
   const tokens = await startSession({ id: out.userId, company_id: out.companyId }, req);
-  res.status(201).json(tokens);
+  sendTokens(req, res, tokens, 201);
 }));
 
 async function startSession(user, req) {
@@ -143,7 +144,7 @@ router.post('/demo', h(async (req, res) => {
     await audit(db, { companyId, userId: u.rows[0].id }, 'demonstracao.criada', { entity: 'company', entityId: companyId });
     return { companyId, userId: u.rows[0].id };
   });
-  res.status(201).json(await startSession({ id: out.userId, company_id: out.companyId }, req));
+  sendTokens(req, res, await startSession({ id: out.userId, company_id: out.companyId }, req), 201);
 }));
 
 /** Converte a demonstração em uso normal: empresa, responsável, e-mail e senha (mantendo ou apagando o movimento de exemplo). */
@@ -201,7 +202,7 @@ router.post('/activate', auth(), h(async (req, res) => {
   });
   try { await flushOutbox(5); } catch { /* reenviada depois */ }
   // a troca de senha encerrou a sessão da demonstração: abre uma nova já como conta real
-  res.json(await startSession({ id: req.ctx.userId, company_id: cid }, req));
+  sendTokens(req, res, await startSession({ id: req.ctx.userId, company_id: cid }, req));
 }));
 
 router.post('/login', h(async (req, res) => {
@@ -225,7 +226,7 @@ router.post('/login', h(async (req, res) => {
   await q('update users set failed_attempts = 0, locked_until = null where id = $1', [u.id]);
   await q('update companies set last_access_at = now() where id = $1', [u.company_id]);
   await audit({ query: q }, { companyId: u.company_id, userId: u.id }, 'login', { entity: 'user', entityId: u.id });
-  res.json(await startSession(u, req));
+  sendTokens(req, res, await startSession(u, req));
 }));
 
 // ---- Esqueci minha senha: link de uso único (60 min) enviado pela central, com o remetente da plataforma ----
@@ -281,7 +282,14 @@ router.post('/reset', h(async (req, res) => {
 }));
 
 router.post('/refresh', h(async (req, res) => {
-  const raw = String(req.body?.refresh_token || '');
+  try { await refreshSession(req, res); } catch (e) {
+    if (cookieMode(req) && e?.status === 401) clearRefreshCookie(res); // sessão inválida/encerrada: o cookie também sai
+    throw e;
+  }
+}));
+
+async function refreshSession(req, res) {
+  const raw = readRefresh(req); // corpo (modo antigo) ou cookie HttpOnly (modo cookie, com verificação de origem)
   const [sid, secret] = raw.split('.');
   if (!sid || !secret || !/^[0-9a-f-]{36}$/.test(sid)) throw new HttpError(401, 'Sessão inválida', 'unauthenticated');
   const out = await tx(async (db) => {
@@ -300,13 +308,14 @@ router.post('/refresh', h(async (req, res) => {
     return { access_token: signAccess({ id: s.user_id, company_id: s.company_id }, sid), refresh_token: `${sid}.${next}` };
   });
   if (!out) throw new HttpError(401, 'Sessão encerrada por segurança. Entre novamente.', 'unauthenticated');
-  res.json(out);
-}));
+  sendTokens(req, res, out);
+}
 
 router.post('/logout', auth(), h(async (req, res) => {
   const all = req.body?.all === true;
   if (all) await q('update user_sessions set revoked_at = now() where user_id = $1 and revoked_at is null', [req.ctx.userId]);
   else await q('update user_sessions set revoked_at = now() where id = $1', [req.ctx.sessionId]);
+  if (cookieMode(req)) clearRefreshCookie(res);
   res.json({ ok: true });
 }));
 

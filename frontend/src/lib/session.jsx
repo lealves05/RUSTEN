@@ -13,11 +13,11 @@ export function applyTheme(theme) {
 
 export function SessionProvider({ children }) {
   const [me, setMe] = useState(null);
-  const [loading, setLoading] = useState(!!tokens.access);
+  const [loading, setLoading] = useState(tokens.hasSession);
   const [blocked, setBlocked] = useState(null);
 
   const load = useCallback(async () => {
-    if (!tokens.access) { setMe(null); setLoading(false); return null; }
+    if (!tokens.access && !tokens.hasSession) { setMe(null); setLoading(false); return null; }
     try {
       const data = await api('/api/auth/me');
       setMe(data);

@@ -16,7 +16,9 @@
   },
   "vars": {
     "PRODUCT_ID": "rusten",
-    "API_UPSTREAM": "https://dwfbxrfniarhufltmlhb.supabase.co/functions/v1/rusten-api"
+    "API_UPSTREAM": "https://dwfbxrfniarhufltmlhb.supabase.co/functions/v1/rusten-api",
+    // F05: cookie HttpOnly da renovação da sessão (só ele é repassado entre o site e a API)
+    "SESSION_COOKIES": "__Host-rusten_rt"
   },
   "observability": { "enabled": true }
 }

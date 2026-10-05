@@ -1720,6 +1720,48 @@ function trialInfo(t) {
   return { trial: false, trial_days: null, trial_label: null };
 }
 
+// src/lib/sessionCookie.js
+var COOKIE = "__Host-rusten_rt";
+var cookieMode = (req) => String(req.get("x-session-mode") || "").toLowerCase() === "cookie";
+function readCookie(req, name = COOKIE) {
+  for (const part of String(req.headers.cookie || "").split(";")) {
+    const i = part.indexOf("=");
+    if (i > 0 && part.slice(0, i).trim() === name) return decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return null;
+}
+function assertSameOrigin(req) {
+  const origin = String(req.get("origin") || "");
+  if (!origin) throw new HttpError(403, "Origem da requisi\xE7\xE3o n\xE3o informada.", "csrf");
+  let host;
+  try {
+    host = new URL(origin).host;
+  } catch {
+    throw new HttpError(403, "Origem inv\xE1lida.", "csrf");
+  }
+  const site = String(req.get("x-edge-site") || "");
+  const allowed = String(env.CORS_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const dev = env.NODE_ENV !== "production" && /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host);
+  if (!(site && host === site) && !allowed.includes(origin) && !dev) throw new HttpError(403, "Origem n\xE3o autorizada.", "csrf");
+}
+var cookieValue = (v, maxAge) => `${COOKIE}=${v ? encodeURIComponent(v) : ""}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`;
+function sendTokens(req, res, tokens2, status = 200) {
+  if (!cookieMode(req)) return res.status(status).json(tokens2);
+  const { refresh_token: rt, ...rest } = tokens2;
+  res.append("Set-Cookie", cookieValue(rt, REFRESH_TTL_DAYS * 86400));
+  res.set("Cache-Control", "no-store");
+  return res.status(status).json({ ...rest, session: "cookie" });
+}
+function clearRefreshCookie(res) {
+  res.append("Set-Cookie", cookieValue("", 0));
+}
+function readRefresh(req) {
+  const body = String(req.body?.refresh_token || "");
+  if (cookieMode(req)) assertSameOrigin(req);
+  if (body) return body;
+  return cookieMode(req) ? String(readCookie(req) || "") : "";
+}
+
 // src/routes/auth.js
 var router = Router();
 var COMMON = ["12345678", "senha123", "password", "qwerty", "123456789", "rusten123", "abc12345"];
@@ -1800,7 +1842,7 @@ router.post("/register", h(async (req, res) => {
   } catch {
   }
   const tokens2 = await startSession({ id: out.userId, company_id: out.companyId }, req);
-  res.status(201).json(tokens2);
+  sendTokens(req, res, tokens2, 201);
 }));
 async function startSession(user, req) {
   const sid = crypto4.randomUUID();
@@ -1865,7 +1907,7 @@ router.post("/demo", h(async (req, res) => {
     await audit(db, { companyId, userId: u.rows[0].id }, "demonstracao.criada", { entity: "company", entityId: companyId });
     return { companyId, userId: u.rows[0].id };
   });
-  res.status(201).json(await startSession({ id: out.userId, company_id: out.companyId }, req));
+  sendTokens(req, res, await startSession({ id: out.userId, company_id: out.companyId }, req), 201);
 }));
 router.post("/activate", auth(), h(async (req, res) => {
   const b = parse(z.object({
@@ -1939,7 +1981,7 @@ router.post("/activate", auth(), h(async (req, res) => {
     await flushOutbox(5);
   } catch {
   }
-  res.json(await startSession({ id: req.ctx.userId, company_id: cid }, req));
+  sendTokens(req, res, await startSession({ id: req.ctx.userId, company_id: cid }, req));
 }));
 router.post("/login", h(async (req, res) => {
   const b = parse(z.object({ email: z.string().trim().toLowerCase().max(160), password: z.string().max(200) }), req.body);
@@ -1962,7 +2004,7 @@ router.post("/login", h(async (req, res) => {
   await q("update users set failed_attempts = 0, locked_until = null where id = $1", [u.id]);
   await q("update companies set last_access_at = now() where id = $1", [u.company_id]);
   await audit({ query: q }, { companyId: u.company_id, userId: u.id }, "login", { entity: "user", entityId: u.id });
-  res.json(await startSession(u, req));
+  sendTokens(req, res, await startSession(u, req));
 }));
 var RESET_MIN = 60;
 var GENERIC_FORGOT = { ok: true, message: "Se o e-mail estiver cadastrado, voc\xEA vai receber um link para criar uma nova senha em alguns minutos." };
@@ -2026,7 +2068,15 @@ router.post("/reset", h(async (req, res) => {
   res.json(out);
 }));
 router.post("/refresh", h(async (req, res) => {
-  const raw = String(req.body?.refresh_token || "");
+  try {
+    await refreshSession(req, res);
+  } catch (e) {
+    if (cookieMode(req) && e?.status === 401) clearRefreshCookie(res);
+    throw e;
+  }
+}));
+async function refreshSession(req, res) {
+  const raw = readRefresh(req);
   const [sid, secret] = raw.split(".");
   if (!sid || !secret || !/^[0-9a-f-]{36}$/.test(sid)) throw new HttpError(401, "Sess\xE3o inv\xE1lida", "unauthenticated");
   const out = await tx(async (db) => {
@@ -2046,12 +2096,13 @@ router.post("/refresh", h(async (req, res) => {
     return { access_token: signAccess({ id: s.user_id, company_id: s.company_id }, sid), refresh_token: `${sid}.${next}` };
   });
   if (!out) throw new HttpError(401, "Sess\xE3o encerrada por seguran\xE7a. Entre novamente.", "unauthenticated");
-  res.json(out);
-}));
+  sendTokens(req, res, out);
+}
 router.post("/logout", auth(), h(async (req, res) => {
   const all = req.body?.all === true;
   if (all) await q("update user_sessions set revoked_at = now() where user_id = $1 and revoked_at is null", [req.ctx.userId]);
   else await q("update user_sessions set revoked_at = now() where id = $1", [req.ctx.sessionId]);
+  if (cookieMode(req)) clearRefreshCookie(res);
   res.json({ ok: true });
 }));
 router.post("/password", auth(), h(async (req, res) => {
@@ -7636,7 +7687,7 @@ function createApp() {
     origin: (o, cb) => cb(null, allowed(o)),
     credentials: false,
     maxAge: 600,
-    allowedHeaders: ["content-type", "authorization", "x-terminal-id"]
+    allowedHeaders: ["content-type", "authorization", "x-terminal-id", "x-session-mode"]
   }));
   app2.use("/api", (_req, res, next) => {
     res.set("Cache-Control", "no-store");

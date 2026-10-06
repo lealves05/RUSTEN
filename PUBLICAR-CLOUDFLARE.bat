@@ -29,6 +29,14 @@ echo [%date% %time%] inicio > "%LOG%"
 where git >nul 2>nul || (echo Git nao encontrado. Instale em https://git-scm.com/download/win & pause & exit /b 1)
 where node >nul 2>nul || (echo Node nao encontrado. & pause & exit /b 1)
 git rev-parse --verify cloudflare >nul 2>nul || (echo A branch "cloudflare" nao existe neste repositorio. & pause & exit /b 1)
+rem ---- backup automatico da versao que sera publicada (D:\Programacao\BACKUP-Sistemas; nunca sobrescreve) ----
+set "BKP_NODE=node"
+if exist "%~dp0..\node-v24.20.0-win-x64\node.exe" set "BKP_NODE=%~dp0..\node-v24.20.0-win-x64\node.exe"
+if exist "%~dp0..\node-v24.20.0-win-x64\node-v24.20.0-win-x64\node.exe" set "BKP_NODE=%~dp0..\node-v24.20.0-win-x64\node-v24.20.0-win-x64\node.exe"
+echo.
+echo  Backup do RUSTEN antes de publicar...
+"%BKP_NODE%" "%~dp0backup-sistema.mjs" --sistema RUSTEN --repo "%~dp0." --ref cloudflare --destino "D:\Programacao\BACKUP-Sistemas"
+if errorlevel 1 (echo   O backup falhou: a publicacao foi cancelada para nao publicar sem copia de seguranca. & pause & exit /b 1)
 if not exist "%KEYS%" mkdir "%KEYS%"
 
 echo.

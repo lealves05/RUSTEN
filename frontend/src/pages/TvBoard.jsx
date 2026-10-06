@@ -216,7 +216,7 @@ export default function TvBoard() {
       {/* cabeçalho */}
       <div className="flex items-center justify-between px-[3vw] pt-[2vh]">
         <div className="flex min-w-0 items-center gap-[1.5vw]">
-          {cfg.showLogo && logo && <img src={logo} alt="" style={{ height: `${cfg.logoSize}vh`, maxWidth: '30vw' }} className="object-contain" data-tv-logo />}
+          {cfg.showLogo && logo && <img src={logo} alt="" style={{ maxHeight: `${cfg.logoSize}vh`, maxWidth: '28vw', width: 'auto', height: 'auto' }} className="block shrink-0 object-contain" data-tv-logo />}
           <div className="truncate leading-none tracking-wide" style={{ fontSize: `${4.2 * cfg.scale}vw` }}>{cfg.title}{areas.length === 1 && areas[0].name ? <span className="opacity-60"> · {areas[0].name}</span> : null}</div>
         </div>
         <div className="flex items-center gap-3 text-[1.6vw] opacity-80">

@@ -6,7 +6,7 @@ import { Link } from 'react-router-dom';
 import { ImagePlus, MonitorPlay, RotateCcw, Trash2 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useSession, applyTheme } from '../lib/session.jsx';
-import { ACCENTS, BODY_FONTS, DEFAULT_APPEARANCE, DISPLAY_FONTS, applyBrand, forgetBrandImage, shrinkImage, useBrandImage } from '../lib/brand.js';
+import { ACCENTS, BODY_FONTS, DEFAULT_APPEARANCE, DISPLAY_FONTS, applyBrand, forgetBrandImage, prepareLogo, shrinkImage, useBrandImage } from '../lib/brand.js';
 import { Field, Toggle, useToast } from './ui.jsx';
 
 const LIMITS = { logo: { max: 600, maxBytes: 380 * 1024, keepAlpha: true }, fundo: { max: 1920, maxBytes: 1500 * 1024 }, tv_fundo: { max: 1920, maxBytes: 1500 * 1024 } };
@@ -16,13 +16,19 @@ export function ImagePicker({ kind, title, hint, manage, onError, tall }) {
   const toast = useToast();
   const url = useBrandImage(kind, s.me?.brand?.[`${kind}_v`]);
   const [busy, setBusy] = useState(false);
+  const [autoBg, setAutoBg] = useState(true);
   const pick = async (e) => {
     const file = e.target.files?.[0]; e.target.value = ''; if (!file) return;
     setBusy(true);
     try {
-      const data = await shrinkImage(file, LIMITS[kind]);
+      let data; let note = '';
+      if (kind === 'logo') {
+        const r = await prepareLogo(file, { removeBg: autoBg });
+        data = r.data;
+        note = [r.removedBg && 'fundo removido', r.trimmed && 'sobras cortadas'].filter(Boolean).join(' e ');
+      } else data = await shrinkImage(file, LIMITS[kind]);
       await api(`/api/brand/${kind}`, { method: 'PUT', body: { data_url: data } });
-      forgetBrandImage(kind); await s.reload(); toast('Imagem salva');
+      forgetBrandImage(kind); await s.reload(); toast(note ? `Logotipo ajustado (${note})` : 'Imagem salva');
     } catch (x) { onError(x); } finally { setBusy(false); }
   };
   const remove = async () => {
@@ -32,10 +38,12 @@ export function ImagePicker({ kind, title, hint, manage, onError, tall }) {
     <div className="rounded-xl border border-dashed border-line p-3" data-brand-picker={kind}>
       <div className="text-sm font-semibold">{title}</div>
       {hint && <div className="text-xs text-muted">{hint}</div>}
-      <div className={`mt-2 grid place-items-center overflow-hidden rounded-lg ${tall ? 'h-32' : 'h-20'}`}
+      <div className={`relative mt-2 overflow-hidden rounded-lg ${tall ? 'h-32' : 'h-24'}`}
         style={{ background: 'repeating-conic-gradient(rgb(var(--line)) 0 25%, transparent 0 50%) 0 0 / 16px 16px' }}>
-        {url ? <img src={url} alt={title} className={`h-full w-full ${tall ? 'object-cover' : 'object-contain'}`} /> : <span className="text-xs text-muted">Nenhuma imagem</span>}
+        {url ? <img src={url} alt={title} className={`absolute inset-0 h-full w-full ${tall ? 'object-cover' : 'object-contain p-2'}`} />
+          : <span className="absolute inset-0 grid place-items-center text-xs text-muted">Nenhuma imagem</span>}
       </div>
+      {kind === 'logo' && manage && <label className="mt-2 flex items-center gap-2 text-xs"><input type="checkbox" checked={autoBg} onChange={(e) => setAutoBg(e.target.checked)} data-logo-autobg /> Ajustar sozinho: tirar o fundo liso (branco ou de uma cor) e cortar as sobras</label>}
       {manage && (
         <div className="mt-2 flex flex-wrap gap-2">
           <label className="btn-ghost cursor-pointer py-1 text-sm"><ImagePlus size={16} /> {busy ? 'Enviando…' : url ? 'Trocar' : 'Escolher imagem'}
@@ -75,7 +83,7 @@ export function BrandSettings({ value, onChange, manage, companyName, onError })
       <section className="space-y-3">
         <h3 className="font-display text-2xl">Marca</h3>
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <ImagePicker kind="logo" title="Logotipo" hint="PNG com fundo transparente fica melhor. Aparece no menu, no Painel da TV e nas telas." manage={manage} onError={onError} />
+          <ImagePicker kind="logo" title="Logotipo" hint="Pode ser JPG ou PNG: o sistema tira o fundo liso, corta as sobras e ajusta o tamanho sozinho. Aparece no menu, no Painel da TV e nas telas." manage={manage} onError={onError} />
           <div className="space-y-3">
             <Field label="O que aparece no topo do menu">
               <select className="input" disabled={dis} value={ap.logo_mode} onChange={(e) => set('logo_mode', e.target.value)} data-brand-mode>

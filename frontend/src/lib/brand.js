@@ -100,3 +100,75 @@ export async function shrinkImage(file, { max, maxBytes, keepAlpha }) {
   }
   throw new Error('Imagem grande demais mesmo reduzida. Tente outra.');
 }
+
+const readImage = async (file) => {
+  if (!/^image\/(jpeg|png|webp)$/.test(file.type)) throw new Error('Use uma imagem JPG, PNG ou WebP');
+  const src = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error('Não foi possível ler a imagem')); r.readAsDataURL(file); });
+  return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Imagem inválida')); i.src = src; });
+};
+
+/**
+ * Ajuste automático do logotipo: tira o fundo liso (branco ou de uma cor só, a partir das bordas, sem mexer no
+ * que está dentro do desenho), corta as sobras em volta e reduz para caber nos espaços do sistema e da TV.
+ * @returns {Promise<{ data: string, removedBg: boolean, trimmed: boolean }>}
+ */
+export async function prepareLogo(file, { removeBg = true, max = 640, maxBytes = 380 * 1024 } = {}) {
+  const img = await readImage(file);
+  const k0 = Math.min(1, 1400 / Math.max(img.width, img.height));
+  const W = Math.max(1, Math.round(img.width * k0)); const H = Math.max(1, Math.round(img.height * k0));
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, W, H);
+  const id = ctx.getImageData(0, 0, W, H); const d = id.data;
+  const at = (x, y) => (y * W + x) * 4;
+  // cor de fundo: a mais comum nas bordas (se a borda for quase toda dessa cor)
+  let removedBg = false;
+  if (removeBg) {
+    const border = [];
+    for (let x = 0; x < W; x += Math.max(1, Math.floor(W / 200))) border.push(at(x, 0), at(x, H - 1));
+    for (let y = 0; y < H; y += Math.max(1, Math.floor(H / 200))) border.push(at(0, y), at(W - 1, y));
+    const opaque = border.filter((i) => d[i + 3] > 200);
+    if (opaque.length > border.length * 0.9) {
+      const q = (v) => v >> 4; const count = new Map();
+      for (const i of opaque) { const key = `${q(d[i])},${q(d[i + 1])},${q(d[i + 2])}`; count.set(key, (count.get(key) || 0) + 1); }
+      const [bestKey, n] = [...count.entries()].sort((a, b) => b[1] - a[1])[0];
+      if (n > opaque.length * 0.85) {
+        const [br, bg, bb] = (() => { let r = 0, g = 0, b = 0, m = 0; for (const i of opaque) if (`${q(d[i])},${q(d[i + 1])},${q(d[i + 2])}` === bestKey) { r += d[i]; g += d[i + 1]; b += d[i + 2]; m++; } return [r / m, g / m, b / m]; })();
+        const dist = (i) => Math.max(Math.abs(d[i] - br), Math.abs(d[i + 1] - bg), Math.abs(d[i + 2] - bb));
+        const TOL = 34; const SOFT = 70;
+        const seen = new Uint8Array(W * H); const stack = [];
+        const push = (x, y) => { const p = y * W + x; if (!seen[p] && dist(p * 4) <= SOFT) { seen[p] = 1; stack.push(p); } };
+        for (let x = 0; x < W; x++) { push(x, 0); push(x, H - 1); }
+        for (let y = 0; y < H; y++) { push(0, y); push(W - 1, y); }
+        while (stack.length) {
+          const p = stack.pop(); const i = p * 4; const dd = dist(i);
+          // fundo some; borda suave (antisserrilhado) fica semitransparente
+          d[i + 3] = dd <= TOL ? 0 : Math.min(d[i + 3], Math.round(255 * (dd - TOL) / (SOFT - TOL)));
+          if (dd > TOL) continue; // não atravessa a borda do desenho
+          const x = p % W; const y = (p - x) / W;
+          if (x > 0) push(x - 1, y); if (x < W - 1) push(x + 1, y); if (y > 0) push(x, y - 1); if (y < H - 1) push(x, y + 1);
+        }
+        ctx.putImageData(id, 0, 0);
+        removedBg = true;
+      }
+    }
+  }
+  // corta as sobras transparentes em volta
+  const px = ctx.getImageData(0, 0, W, H).data;
+  let x0 = W, y0 = H, x1 = -1, y1 = -1;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (px[(y * W + x) * 4 + 3] > 12) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  if (x1 < 0) throw new Error('O logotipo ficou vazio: use uma imagem com o desenho visível.');
+  const pad = Math.round(Math.max(x1 - x0, y1 - y0) * 0.03);
+  x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad); x1 = Math.min(W - 1, x1 + pad); y1 = Math.min(H - 1, y1 + pad);
+  const cw = x1 - x0 + 1; const ch = y1 - y0 + 1;
+  const trimmed = cw < W || ch < H;
+  for (const m of [max, Math.round(max * 0.75), Math.round(max * 0.55), Math.round(max * 0.4)]) {
+    const k = Math.min(1, m / Math.max(cw, ch));
+    const o = document.createElement('canvas'); o.width = Math.max(1, Math.round(cw * k)); o.height = Math.max(1, Math.round(ch * k));
+    o.getContext('2d').drawImage(c, x0, y0, cw, ch, 0, 0, o.width, o.height);
+    for (const out of [o.toDataURL('image/png'), o.toDataURL('image/webp', 0.9), o.toDataURL('image/webp', 0.75)]) {
+      if (/^data:image\/(png|webp)/.test(out) && out.length * 0.75 < maxBytes) return { data: out, removedBg, trimmed };
+    }
+  }
+  throw new Error('Logotipo grande demais mesmo reduzido. Tente outra imagem.');
+}

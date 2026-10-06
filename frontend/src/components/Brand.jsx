@@ -9,14 +9,17 @@ export function BrandLogo({ compact = false }) {
   const logo = useBrandImage('logo', ap.logo_mode !== 'rusten' && ap.logo_mode !== 'nome' ? s.me?.brand?.logo_v : null);
   if (ap.logo_mode === 'rusten' || (ap.logo_mode !== 'nome' && !s.me?.brand?.logo_v)) return <Logo size={compact ? 32 : 34} withText={!compact} />;
   const title = ap.brand_title || s.me?.company?.name || '';
-  const size = compact ? Math.min(40, ap.logo_size) : ap.logo_size;
+  const withName = !compact && ap.logo_mode !== 'logo';
+  // o logotipo cabe sempre no espaço: altura no máximo a escolhida e largura limitada (menos quando o nome aparece ao lado)
+  const h = compact ? 40 : ap.logo_size;
+  const maxW = compact ? 44 : withName ? '46%' : '100%';
   return (
-    <div className="flex min-w-0 items-center gap-2 select-none" data-brand-logo>
-      {ap.logo_mode !== 'nome' && (logo ? <img src={logo} alt={title} style={{ height: size, maxWidth: compact ? size : size * 3.2 }} className="shrink-0 object-contain" />
-        : <span style={{ height: size, width: size }} className="shrink-0 rounded bg-raised" />)}
-      {!compact && ap.logo_mode !== 'logo' && (
-        <div className="min-w-0 leading-none">
-          <div className="truncate font-display text-2xl tracking-wide">{title}</div>
+    <div className="flex w-full min-w-0 items-center gap-2 overflow-hidden select-none" data-brand-logo>
+      {ap.logo_mode !== 'nome' && (logo ? <img src={logo} alt={title} style={{ maxHeight: h, maxWidth: maxW, width: 'auto', height: 'auto' }} className="block shrink object-contain" />
+        : <span style={{ height: h, width: h }} className="shrink-0 rounded bg-raised" />)}
+      {withName && (
+        <div className="min-w-0 flex-1 leading-tight">
+          <div className={`line-clamp-2 break-words font-display tracking-wide ${title.length > 18 ? 'text-lg' : 'text-2xl'}`} title={title}>{title}</div>
           {ap.brand_subtitle && <div className="truncate text-[10px] uppercase tracking-widest text-muted">{ap.brand_subtitle}</div>}
         </div>
       )}

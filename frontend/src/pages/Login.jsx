@@ -12,7 +12,7 @@ export function AuthShell({ children, title, subtitle }) {
         <div className="absolute inset-0 opacity-30" style={{ backgroundImage: 'repeating-linear-gradient(135deg,#B8733333 0 14px,transparent 14px 28px)' }} />
         <div className="relative"><Logo size={48} /></div>
         <div className="relative">
-          <div className="font-display text-7xl leading-[0.9] tracking-wide">Do balcão<br />à oficina,<br /><span className="text-[#B87333]">tudo no ponto.</span></div>
+          <div className="font-display text-7xl leading-[0.9] tracking-wide">Do balcão<br />à cozinha,<br /><span className="text-[#B87333]">tudo no ponto.</span></div>
           <p className="mt-6 max-w-md text-[#F3E9D2]/80">Comandas, mesas, leitor de códigos e caixa num só lugar — feito para o ritmo de bar e restaurante.</p>
         </div>
         <div className="relative flex gap-6 text-xs uppercase tracking-[0.3em] text-[#F3E9D2]/60"><span>Comanda</span><span>•</span><span>Produto</span><span>•</span><span>Caixa</span></div>

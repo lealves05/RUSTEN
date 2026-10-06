@@ -97,24 +97,27 @@ export default function Register() {
           </div>
         ))}
         {step === 3 && <>
-          <Field label="Nome da unidade"><input className="input" value={f.setup.unit_name} onChange={(e) => set('setup', 'unit_name', e.target.value)} /></Field>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Mesas"><input className="input" type="number" min={0} max={300} value={f.setup.tables} onChange={(e) => set('setup', 'tables', Number(e.target.value))} /></Field>
-            <Field label="Cartões de comanda"><input className="input" type="number" min={0} max={2000} value={f.setup.cards} onChange={(e) => set('setup', 'cards', Number(e.target.value))} /></Field>
+            <Field label="Mesas" hint="Quantas mesas o salão tem. Pode ser 0."><input className="input" type="number" inputMode="numeric" min={0} max={300} value={f.setup.tables} onChange={(e) => set('setup', 'tables', Number(e.target.value))} /></Field>
+            <Field label="Comandas individuais" hint="Cartões numerados que o cliente leva (bar/balada). Use 0 se só atende por mesa."><input className="input" type="number" inputMode="numeric" min={0} max={2000} value={f.setup.cards} onChange={(e) => set('setup', 'cards', Number(e.target.value))} /></Field>
           </div>
-          <Field label="Modo do PDV" hint="Pode ser trocado a qualquer momento em Configurações › PDV.">
-            <select className="input" value={f.setup.mode} onChange={(e) => set('setup', 'mode', e.target.value)}>
-              <option value="manual">Manual — busca e catálogo, leitor opcional</option>
-              <option value="continua">Leitura contínua — lê a comanda uma vez e depois os produtos</option>
-              <option value="dupla">Dupla leitura — comanda e produto a cada item</option>
-            </select>
-          </Field>
-          <Field label="A jornada vira o dia até" hint="Vendas antes deste horário contam no dia comercial anterior.">
-            <select className="input" value={f.setup.day_cutoff} onChange={(e) => set('setup', 'day_cutoff', Number(e.target.value))}>
-              {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
-            </select>
-          </Field>
-          <Toggle checked={f.setup.demo} onChange={(v) => set('setup', 'demo', v)} label="Carregar cardápio de demonstração" hint="Identificado como demonstração; pode ser removido depois sem afetar vendas reais." />
+          <details className="rounded-lg border border-line p-3 text-sm">
+            <summary className="min-h-[32px] cursor-pointer font-semibold">Mais opções (pode deixar como está)</summary>
+            <Field label="Leitor de código de barras" hint="Pode ser trocado a qualquer momento em Configurações › PDV." className="mt-3">
+              <select className="input" value={f.setup.mode} onChange={(e) => set('setup', 'mode', e.target.value)}>
+                <option value="manual">Não uso leitor — toco nos produtos na tela</option>
+                <option value="continua">Leio a comanda uma vez e depois os produtos</option>
+                <option value="dupla">Leio comanda e produto a cada item (mais seguro)</option>
+              </select>
+            </Field>
+            <Field label="Horário de fechamento do dia" hint="Para quem fecha de madrugada: vendas antes deste horário contam no dia anterior (ex.: 02h de sábado conta na sexta)." className="mt-3">
+              <select className="input" value={f.setup.day_cutoff} onChange={(e) => set('setup', 'day_cutoff', Number(e.target.value))}>
+                {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
+              </select>
+            </Field>
+            <Field label="Nome da unidade" hint="Útil se você tiver mais de uma loja." className="mt-3"><input className="input" value={f.setup.unit_name} onChange={(e) => set('setup', 'unit_name', e.target.value)} /></Field>
+          </details>
+          <Toggle checked={f.setup.demo} onChange={(v) => set('setup', 'demo', v)} label="Começar com um cardápio de exemplo" hint="Bom para testar. Fica marcado como exemplo e sai com um clique em Configurações › Empresa." />
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-1" checked={f.accept_terms} onChange={(e) => setF({ ...f, accept_terms: e.target.checked })} />
             <span>Li e aceito os termos de uso e a política de privacidade.</span>

@@ -244,32 +244,54 @@ router.get('/export/csv', need('clientes.gerenciar'), h(async (req, res) => {
   res.send(`\ufeff${lines.join('\n')}`);
 }));
 
-// Importação: prévia (dry_run) com validação e deduplicação por CPF/telefone; depois grava
+// Importação: prévia (dry_run) com validação e deduplicação (CPF, telefone e nome); depois grava só as linhas enviadas.
+// A tela envia apenas as linhas que o usuário marcou; cada linha pode trazer _line (número na planilha).
+const nameKey = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+function importDate(raw) {
+  const s = String(raw || '').trim();
+  let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  if (/^\d{4,5}(\.\d+)?$/.test(s) && Number(s) > 1 && Number(s) < 80000) return new Date(Math.round((Number(s) - 25569) * 86400000)).toISOString().slice(0, 10);
+  return null;
+}
 router.post('/import', need('clientes.gerenciar', 'dados.pessoais'), h(async (req, res) => {
-  const b = parse(z.object({ rows: z.array(z.record(z.string(), z.any())).max(2000), dry_run: z.boolean().default(true) }), req.body);
-  const pick = (r, ...keys) => { for (const k of Object.keys(r)) if (keys.includes(k.toLowerCase().trim())) return String(r[k] ?? '').trim(); return ''; };
-  const existing = (await q('select cpf, regexp_replace(coalesce(phone,\'\'),\'\\D\',\'\',\'g\') as phone from customers where company_id = $1', [req.ctx.companyId])).rows;
+  const b = parse(z.object({ rows: z.array(z.record(z.string(), z.any())).max(5000), dry_run: z.boolean().default(true) }), req.body);
+  const pick = (r, ...keys) => { for (const k of Object.keys(r)) if (keys.includes(k.toLowerCase().trim())) { const v = String(r[k] ?? '').trim(); if (v) return v; } return ''; };
+  const existing = (await q('select name, cpf, regexp_replace(coalesce(phone,\'\'),\'\\D\',\'\',\'g\') as phone from customers where company_id = $1 and anonymized_at is null', [req.ctx.companyId])).rows;
   const cpfs = new Set(existing.map((e) => e.cpf).filter(Boolean));
   const phones = new Set(existing.map((e) => e.phone).filter(Boolean));
+  const names = new Set(existing.filter((e) => !e.cpf).map((e) => nameKey(e.name)));
+  const seenCpf = new Map(); const seenPhone = new Map(); const seenName = new Map();
   const report = [];
   const ok = [];
   b.rows.forEach((r, i) => {
-    const name = pick(r, 'nome', 'name', 'cliente');
-    const cpfRaw = pick(r, 'cpf', 'documento');
-    const phone = phoneNorm(pick(r, 'telefone', 'celular', 'whatsapp', 'phone'));
-    const email = pick(r, 'email', 'e-mail');
-    let birthday = pick(r, 'aniversario', 'aniversário', 'nascimento', 'birthday');
-    const m = birthday.match(/^(\d{2})\/(\d{2})\/(\d{4})$/); if (m) birthday = `${m[3]}-${m[2]}-${m[1]}`;
-    const line = i + 2;
-    if (name.length < 2) return report.push({ line, status: 'erro', message: 'Nome ausente' });
-    let cpf = null;
-    if (cpfRaw) { try { cpf = normalizeCpf(cpfRaw); } catch { return report.push({ line, status: 'erro', message: 'CPF inválido' }); } }
-    if (cpf && cpfs.has(cpf)) return report.push({ line, status: 'duplicado', message: 'CPF já cadastrado' });
-    if (!cpf && phone && phones.has(phone)) return report.push({ line, status: 'duplicado', message: 'Telefone já cadastrado' });
-    if (birthday && !/^\d{4}-\d{2}-\d{2}$/.test(birthday)) birthday = '';
-    if (cpf) cpfs.add(cpf); if (phone) phones.add(phone);
-    ok.push({ name: name.slice(0, 100), cpf, phone, email: /@/.test(email) ? email.slice(0, 120) : null, birthday: birthday || null });
-    report.push({ line, status: 'ok', name });
+    const line = Number.isInteger(Number(r._line)) && Number(r._line) > 0 ? Number(r._line) : i + 2;
+    const name = pick(r, 'nome', 'name', 'cliente', 'nome do cliente', 'nome completo', 'razao social', 'razão social');
+    const cpfRaw = pick(r, 'cpf', 'documento', 'cpf ou cnpj', 'cpf/cnpj', 'cnpj');
+    const phone = phoneNorm(pick(r, 'telefone', 'celular', 'whatsapp', 'phone', 'telefone principal', 'fone', 'telefone 1'));
+    const emailRaw = pick(r, 'email', 'e-mail', 'e mail');
+    const birthday = importDate(pick(r, 'aniversario', 'aniversário', 'nascimento', 'data de nascimento', 'birthday'));
+    const view = { line, name: name.slice(0, 100), cpf: null, phone: phone || null };
+    if (name.length < 2) return report.push({ ...view, status: 'erro', message: 'Nome ausente' });
+    let cpf = null; const notes = [];
+    const digits = onlyDigits(cpfRaw);
+    if (digits) {
+      if (digits.length === 14) notes.push('CNPJ não é guardado (entra sem documento)');
+      else { try { cpf = normalizeCpf(digits.padStart(11, '0')); } catch { notes.push('CPF inválido (entra sem CPF)'); } }
+    }
+    view.cpf = cpf ? fmtCpf(cpf) : null;
+    const nk = nameKey(name);
+    // repetido dentro da própria planilha
+    const dupLine = (cpf && seenCpf.get(cpf)) || (!cpf && phone && seenPhone.get(phone)) || (!cpf && !phone && seenName.get(nk));
+    if (dupLine) return report.push({ ...view, status: 'repetido', message: `Igual à linha ${dupLine}` });
+    if (cpf && cpfs.has(cpf)) return report.push({ ...view, status: 'duplicado', message: 'CPF já cadastrado' });
+    if (!cpf && phone && phones.has(phone)) return report.push({ ...view, status: 'duplicado', message: 'Telefone já cadastrado' });
+    if (!cpf && !phone && names.has(nk)) return report.push({ ...view, status: 'duplicado', message: 'Nome já cadastrado (sem CPF nem telefone para diferenciar)' });
+    if (cpf) seenCpf.set(cpf, line); if (phone) seenPhone.set(phone, line); if (!seenName.has(nk)) seenName.set(nk, line);
+    ok.push({ name: name.slice(0, 100), cpf, phone, email: /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailRaw) ? emailRaw.slice(0, 120) : null, birthday });
+    report.push({ ...view, status: notes.length ? 'aviso' : 'ok', message: notes.join('; ') || null });
   });
   if (!b.dry_run && ok.length) {
     await tx(async (db) => {
@@ -278,10 +300,11 @@ router.post('/import', need('clientes.gerenciar', 'dados.pessoais'), h(async (re
           [req.ctx.companyId, c.cpf, c.name, c.phone, c.email, c.birthday, req.ctx.userId]);
       }
       // importação não presume consentimento de marketing
-      await audit(db, req.ctx, 'cliente.importados', { data: { count: ok.length } });
+      await audit(db, req.ctx, 'cliente.importados', { data: { count: ok.length, skipped: b.rows.length - ok.length } });
     });
   }
-  res.json({ dry_run: b.dry_run, valid: ok.length, report: report.slice(0, 500) });
+  const count = (st) => report.filter((r) => r.status === st).length;
+  res.json({ dry_run: b.dry_run, valid: ok.length, summary: { ok: count('ok'), aviso: count('aviso'), repetido: count('repetido'), duplicado: count('duplicado'), erro: count('erro') }, report });
 }));
 
 // Anonimização: remove dados pessoais e preserva consumos/pagamentos que devem ser mantidos

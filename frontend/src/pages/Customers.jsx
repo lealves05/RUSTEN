@@ -192,40 +192,116 @@ function CustomerView({ id, onClose, onEdit, onChanged }) {
   );
 }
 
-function parseCsv(text) {
-  const lines = text.replace(/^\ufeff/, '').split(/\r?\n/).filter((l) => l.trim());
-  if (!lines.length) return [];
-  const sep = (lines[0].match(/;/g) || []).length >= (lines[0].match(/,/g) || []).length ? ';' : ',';
+// CSV → linhas na posição do arquivo (linha vazia = [])
+function csvRows(text) {
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
+  const first = lines.find((l) => l.trim()) || '';
+  const sep = (first.match(/;/g) || []).length >= (first.match(/,/g) || []).length ? ';' : ',';
   const split = (l) => { const out = []; let cur = ''; let qd = false; for (const ch of l) { if (ch === '"') qd = !qd; else if (ch === sep && !qd) { out.push(cur); cur = ''; } else cur += ch; } out.push(cur); return out.map((x) => x.trim()); };
-  const head = split(lines[0]).map((h) => h.toLowerCase());
-  return lines.slice(1).map((l) => Object.fromEntries(split(l).map((v, i) => [head[i] || `c${i}`, v])));
+  return lines.map((l) => (l.trim() ? split(l) : []));
 }
+
+// colunas que o servidor entende (o resto da planilha — endereço, pedidos… — não sai do navegador)
+const IMPORT_COLS = new Set(['nome', 'name', 'cliente', 'nome do cliente', 'nome completo', 'razao social', 'razão social', 'cpf', 'documento', 'cpf ou cnpj', 'cpf/cnpj', 'cnpj',
+  'telefone', 'celular', 'whatsapp', 'phone', 'telefone principal', 'fone', 'telefone 1', 'email', 'e-mail', 'e mail', 'aniversario', 'aniversário', 'nascimento', 'data de nascimento', 'birthday']);
+function toImportRows(grid) {
+  const h = grid.findIndex((r) => r.some((c) => String(c).trim()));
+  if (h < 0) return [];
+  const head = grid[h].map((x) => String(x).trim().toLowerCase());
+  if (!head.some((x) => ['nome', 'name', 'cliente', 'nome do cliente', 'nome completo'].includes(x))) throw new Error('Não achei a coluna "nome" na primeira linha da planilha.');
+  const out = [];
+  for (let i = h + 1; i < grid.length; i++) {
+    const r = grid[i];
+    if (!r.some((c) => String(c).trim())) continue;
+    const o = { _line: i + 1 };
+    head.forEach((k, j) => { if (IMPORT_COLS.has(k) && r[j] != null && String(r[j]).trim() && o[k] == null) o[k] = String(r[j]).trim(); });
+    out.push(o);
+  }
+  return out;
+}
+
+const ST = { ok: ['Novo', 'ok'], aviso: ['Novo (com aviso)', 'warn'], repetido: ['Repetido na planilha', 'muted'], duplicado: ['Já cadastrado', 'muted'], erro: ['Erro', 'bad'] };
 
 function ImportModal({ open, onClose, onDone }) {
   const [rows, setRows] = useState(null);
+  const [file, setFile] = useState('');
   const [preview, setPreview] = useState(null);
+  const [sel, setSel] = useState(() => new Set());
+  const [filter, setFilter] = useState('importar');
+  const [q, setQ] = useState('');
+  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const toast = useToast();
-  useEffect(() => { if (open) { setRows(null); setPreview(null); setErr(null); } }, [open]);
+  useEffect(() => { if (open) { setRows(null); setPreview(null); setErr(null); setFile(''); setSel(new Set()); setFilter('importar'); setQ(''); } }, [open]);
   const onFile = async (e) => {
-    const file = e.target.files[0]; if (!file) return;
+    const f = e.target.files[0]; if (!f) return;
+    setErr(null); setPreview(null); setRows(null); setFile(f.name); setBusy(true);
     try {
-      const r = parseCsv(await file.text());
-      if (r.length > 2000) throw new Error('Máximo de 2.000 linhas por importação');
-      setRows(r); setPreview(await api('/api/customers/import', { method: 'POST', body: { rows: r, dry_run: true } }));
-    } catch (x) { setErr(x); }
+      let grid;
+      if (/\.xlsx$/i.test(f.name)) grid = await (await import('../lib/xlsx.js')).readXlsx(await f.arrayBuffer());
+      else if (/\.xls$/i.test(f.name)) throw new Error('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
+      else grid = csvRows(await f.text());
+      const r = toImportRows(grid);
+      if (!r.length) throw new Error('Nenhuma linha com dados abaixo do cabeçalho.');
+      if (r.length > 5000) throw new Error('Máximo de 5.000 clientes por importação: divida a planilha.');
+      const p = await api('/api/customers/import', { method: 'POST', body: { rows: r, dry_run: true } });
+      setRows(r); setPreview(p);
+      setSel(new Set(p.report.filter((x) => x.status === 'ok' || x.status === 'aviso').map((x) => x.line)));
+    } catch (x) { setErr(x); } finally { setBusy(false); e.target.value = ''; }
   };
   const go = async () => {
-    try { const r = await api('/api/customers/import', { method: 'POST', body: { rows, dry_run: false } }); toast(`${r.valid} cliente(s) importado(s)`); onDone(); onClose(); } catch (x) { setErr(x); }
+    setBusy(true); setErr(null);
+    try {
+      const r = await api('/api/customers/import', { method: 'POST', body: { rows: rows.filter((x) => sel.has(x._line)), dry_run: false } });
+      toast(`${r.valid} cliente(s) importado(s)`); onDone(); onClose();
+    } catch (x) { setErr(x); } finally { setBusy(false); }
   };
+  const can = (r) => r.status === 'ok' || r.status === 'aviso';
+  const list = preview ? preview.report.filter((r) => (filter === 'todos' || (filter === 'importar' ? can(r) : r.status === filter))
+    && (!q || `${r.name} ${r.cpf || ''} ${r.phone || ''}`.toLowerCase().includes(q.toLowerCase()))) : [];
+  const toggle = (line) => setSel((s) => { const n = new Set(s); if (n.has(line)) n.delete(line); else n.add(line); return n; });
+  const setAll = (on) => setSel((s) => { const n = new Set(s); list.filter(can).forEach((r) => (on ? n.add(r.line) : n.delete(r.line))); return n; });
+  const sm = preview?.summary;
   return (
-    <Modal open={open} wide onClose={onClose} title="Importar clientes" footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" aria-disabled={(!preview?.valid) || undefined} data-why={'Escolha o arquivo e confira a prévia antes de importar'} onClick={go}>Importar {preview?.valid || 0}</button></>}>
-      <p className="text-sm text-muted">Arquivo CSV (exportado do Excel) com colunas <b>nome</b>, <b>cpf</b>, <b>telefone</b>, <b>email</b>, <b>aniversario</b>. Duplicados por CPF ou telefone são ignorados. Importar não registra consentimento de marketing.</p>
-      <input type="file" accept=".csv,text/csv" className="mt-3" onChange={onFile} />
+    <Modal open={open} wide onClose={onClose} title="Importar clientes" footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button>
+      <button className="btn-primary" aria-disabled={(!sel.size || busy) || undefined} data-why="Escolha o arquivo e marque os clientes que vão entrar" onClick={() => sel.size && !busy && go()}>Importar {sel.size}</button></>}>
+      <p className="text-sm text-muted">Planilha do Excel (<b>.xlsx</b>) ou CSV com as colunas <b>nome</b>, <b>cpf</b>, <b>telefone</b>, <b>email</b>, <b>aniversario</b> (outros nomes comuns, como "CPF ou CNPJ" e "Telefone Principal", também valem).
+        Clientes repetidos na planilha ou já cadastrados (mesmo CPF, telefone ou, sem os dois, mesmo nome) ficam de fora. Importar não registra consentimento de marketing.</p>
+      <label className="btn-ghost mt-3 inline-flex cursor-pointer"><Upload size={16} /> {file ? 'Trocar arquivo' : 'Escolher arquivo'}
+        <input type="file" accept=".xlsx,.csv,.txt,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="sr-only" onChange={onFile} data-import-file /></label>
+      {file && <span className="ml-2 text-sm">{file}</span>}
+      {busy && !preview && <p className="mt-2 text-sm text-muted">Lendo a planilha…</p>}
       {preview && (
-        <div className="mt-3 max-h-72 overflow-auto">
-          <p className="text-sm"><b>{preview.valid}</b> válidos · {preview.report.filter((r) => r.status !== 'ok').length} com problema</p>
-          <table className="table-clean"><tbody>{preview.report.filter((r) => r.status !== 'ok').map((r) => <tr key={r.line}><td>Linha {r.line}</td><td>{r.status}</td><td>{r.message}</td></tr>)}</tbody></table>
+        <div className="mt-3 space-y-2">
+          <div className="flex flex-wrap gap-2 text-sm" data-import-summary>
+            <Badge tone="ok">{sm.ok + sm.aviso} novos</Badge>
+            {sm.aviso > 0 && <Badge tone="warn">{sm.aviso} com aviso</Badge>}
+            {sm.repetido > 0 && <Badge tone="muted">{sm.repetido} repetidos na planilha (excluídos)</Badge>}
+            {sm.duplicado > 0 && <Badge tone="muted">{sm.duplicado} já cadastrados (excluídos)</Badge>}
+            {sm.erro > 0 && <Badge tone="bad">{sm.erro} com erro</Badge>}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <select className="input max-w-[220px] py-1" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Mostrar">
+              <option value="importar">Novos (podem entrar)</option><option value="todos">Todas as linhas</option><option value="aviso">Com aviso</option>
+              <option value="repetido">Repetidos na planilha</option><option value="duplicado">Já cadastrados</option><option value="erro">Com erro</option>
+            </select>
+            <input className="input max-w-[220px] py-1" placeholder="Buscar nome, CPF ou telefone" value={q} onChange={(e) => setQ(e.target.value)} />
+            {list.some(can) && <><button className="text-sm underline" onClick={() => setAll(true)}>marcar todos</button><button className="text-sm underline" onClick={() => setAll(false)}>desmarcar todos</button></>}
+            <span className="ml-auto text-sm"><b>{sel.size}</b> marcado(s)</span>
+          </div>
+          <div className="max-h-[50vh] overflow-auto">
+            {!list.length ? <p className="py-3 text-sm text-muted">Nada nesta lista.</p> : (
+              <table className="table-clean">
+                <thead><tr><th /><th>Linha</th><th>Nome</th><th>CPF</th><th>Telefone</th><th>Situação</th></tr></thead>
+                <tbody>{list.map((r) => (
+                  <tr key={r.line} className={can(r) && !sel.has(r.line) ? 'opacity-50' : ''}>
+                    <td>{can(r) && <input type="checkbox" aria-label={`Importar ${r.name}`} checked={sel.has(r.line)} onChange={() => toggle(r.line)} />}</td>
+                    <td>{r.line}</td><td className="font-semibold">{r.name || '—'}</td><td className="whitespace-nowrap font-mono text-xs">{r.cpf || '—'}</td><td className="whitespace-nowrap">{r.phone || '—'}</td>
+                    <td><Badge tone={ST[r.status][1]}>{ST[r.status][0]}</Badge>{r.message && <div className="text-xs text-muted">{r.message}</div>}</td>
+                  </tr>))}</tbody>
+              </table>
+            )}
+          </div>
         </div>
       )}
       <div className="mt-3"><ErrorBox error={err} /></div>

@@ -1299,6 +1299,32 @@ await check('cardápio: importar (InfinitePay/planilha) cria e atualiza categori
   assert.equal((await apiC('POST', '/api/menu/import/infinitepay/fetch', { handle: '../evil.com/x' })).status, 400);
   assert.equal((await apiC('POST', '/api/menu/import', { items: [] })).status, 400);
 });
+await check('clientes: importar planilha marca repetidos/já cadastrados e grava só as linhas escolhidas', async () => {
+  const rows = [
+    { _line: 2, nome: 'Ana Importada', cpf: '714.602.380-01', telefone: '(11) 98888-0001' },
+    { _line: 3, nome: 'Ana Importada', 'cpf ou cnpj': '71460238001' },
+    { _line: 4, 'nome completo': 'Bruno Sem Doc', 'telefone principal': '11988880002', aniversario: '05/03/1990' },
+    { _line: 5, nome: 'bruno sem doc', telefone: '11 98888-0002' },
+    { _line: 6, nome: 'Carla Nome Só' },
+    { _line: 7, nome: 'CARLA NOME SÓ' },
+    { _line: 8, nome: 'Davi Cnpj', cpf: '11.222.333/0001-81' },
+    { _line: 9, nome: 'Eva Cpf Ruim', cpf: '111.111.111-12' },
+    { _line: 10, cpf: '264.195.370-61' },
+    { _line: 11, nome: 'Fábio Pulado', cpf: '264.195.370-61' },
+  ];
+  const pv = await apiC('POST', '/api/customers/import', { rows, dry_run: true });
+  assert.equal(pv.status, 200, JSON.stringify(pv.data));
+  const st = Object.fromEntries(pv.data.report.map((r) => [r.line, r.status]));
+  assert.deepEqual(st, { 2: 'ok', 3: 'repetido', 4: 'ok', 5: 'repetido', 6: 'ok', 7: 'repetido', 8: 'aviso', 9: 'aviso', 10: 'erro', 11: 'ok' });
+  const chosen = rows.filter((r) => [2, 4, 6, 8, 9].includes(r._line)); // Fábio desmarcado
+  const r = await apiC('POST', '/api/customers/import', { rows: chosen, dry_run: false });
+  assert.equal(r.status, 200, JSON.stringify(r.data)); assert.equal(r.data.valid, 5);
+  const again = await apiC('POST', '/api/customers/import', { rows, dry_run: true });
+  const st2 = Object.fromEntries(again.data.report.map((x) => [x.line, x.status]));
+  assert.equal(st2[2], 'duplicado'); assert.equal(st2[4], 'duplicado'); assert.equal(st2[6], 'duplicado'); assert.equal(st2[11], 'ok');
+  const bruno = (await pool.query("select birthday::text b, cpf from customers where name = 'Bruno Sem Doc'")).rows[0];
+  assert.equal(bruno.b, '1990-03-05'); assert.equal(bruno.cpf, null);
+});
 await check('remoção da demonstração preserva produtos já vendidos', async () => {
   const login = await anon('POST', '/api/auth/login', { email: 'a@teste.dev', password: 'Motocustom2026x' });
   const a2 = client(login.data.access_token, A.terminal);

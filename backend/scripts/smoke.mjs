@@ -1260,6 +1260,45 @@ await check('foto do produto: valida, aparece no cardápio digital (binária, co
   assert.equal((await api('DELETE', `/api/menu/products/${ipa.id}/photo`)).status, 200);
   assert.equal((await fetch(`${base}/api/public/smoke-foto/foto/${ipa.id}`)).status, 404);
 });
+await check('cardápio: importar (InfinitePay/planilha) cria e atualiza categorias e produtos sem duplicar', async () => {
+  const sectors = (await apiC('GET', '/api/menu/sectors')).data;
+  const ps0 = (await apiC('GET', '/api/menu/products?active=all')).data;
+  const old = ps0.find((p) => p.price_cents > 0);
+  const body = { source: 'infinitepay', categories: ['CHOPP e CERVEJA', 'COZINHA'], items: [
+    { name: 'Chopp Pilsen 300ml', category: 'CHOPP e CERVEJA', price_cents: 1200, available: true },
+    { name: 'Batata frita G', category: 'COZINHA', price_cents: 3290, available: true },
+    { name: 'Porção esgotada', category: 'COZINHA', price_cents: 4000, available: false },
+    { name: 'CHOPP PILSEN 300ML', category: 'CHOPP e CERVEJA', price_cents: 1300, available: true },
+    { name: old.name.toUpperCase(), category: 'COZINHA', price_cents: old.price_cents + 100, available: true },
+  ] };
+  const pv = await apiC('POST', '/api/menu/import', { ...body, dry_run: true });
+  assert.equal(pv.status, 200, JSON.stringify(pv.data));
+  assert.equal(pv.data.summary.criar, 3); assert.equal(pv.data.summary.atualizar, 1); assert.equal(pv.data.summary.ignorar, 1);
+  assert.equal(pv.data.summary.categorias_criar, 2);
+  assert.equal((await apiC('GET', '/api/menu/products?active=all')).data.length, ps0.length); // prévia não grava
+  const coz = sectors.find((x) => /cozinha/i.test(x.name));
+  const r = await apiC('POST', '/api/menu/import', { ...body, category_sectors: coz ? { COZINHA: coz.id } : {} });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.created, 3); assert.equal(r.data.updated, 1); assert.equal(r.data.prices, 1); assert.equal(r.data.categories_created, 2);
+  const cats = (await apiC('GET', '/api/menu/categories')).data;
+  const ps = (await apiC('GET', '/api/menu/products?active=all')).data;
+  const batata = ps.find((p) => p.name === 'Batata frita G');
+  assert.equal(batata.category_id, cats.find((c) => c.name === 'COZINHA').id);
+  if (coz) assert.equal(batata.sector_id, coz.id);
+  assert.equal(ps.find((p) => p.name === 'Porção esgotada').active, false);
+  assert.equal(ps.find((p) => p.id === old.id).price_cents, old.price_cents + 100);
+  assert.equal(ps.find((p) => p.id === old.id).category_id, cats.find((c) => c.name === 'COZINHA').id);
+  // de novo, com a categoria escrita diferente e preço novo: atualiza, não duplica
+  const r2 = await apiC('POST', '/api/menu/import', { source: 'planilha', items: [{ name: 'chopp pilsen 300ml', category: 'Chopp e Cerveja', price_cents: 1400, available: true }] });
+  assert.equal(r2.status, 200, JSON.stringify(r2.data)); assert.equal(r2.data.created, 0); assert.equal(r2.data.updated, 1); assert.equal(r2.data.categories_created, 0);
+  const cats2 = (await apiC('GET', '/api/menu/categories')).data;
+  assert.equal(cats2.length, cats.length); assert.ok(cats2.find((c) => c.name === 'Chopp e Cerveja'));
+  assert.equal((await apiC('GET', '/api/menu/products?active=all')).data.filter((p) => /chopp pilsen 300ml/i.test(p.name)).length, 1);
+  // outra empresa não enxerga nem altera; sem InfiniteTag válida → 400; sem permissão de cardápio, nada
+  assert.equal((await pool.query("select count(*)::int n from products where name = 'Batata frita G' and company_id <> (select company_id from products where id = $1)", [batata.id])).rows[0].n, 0);
+  assert.equal((await apiC('POST', '/api/menu/import/infinitepay/fetch', { handle: '../evil.com/x' })).status, 400);
+  assert.equal((await apiC('POST', '/api/menu/import', { items: [] })).status, 400);
+});
 await check('remoção da demonstração preserva produtos já vendidos', async () => {
   const login = await anon('POST', '/api/auth/login', { email: 'a@teste.dev', password: 'Motocustom2026x' });
   const a2 = client(login.data.access_token, A.terminal);

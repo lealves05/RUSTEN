@@ -1,9 +1,12 @@
 // Cardápio: categorias, setores de produção, produtos, códigos de leitura e modificadores.
 import { Router } from 'express';
 import { z } from 'zod';
-import { q, tx, h, parse, bad, notFound, conflict } from '../lib/core.js';
-import { need, audit } from '../lib/auth.js';
+import { q, tx, h, parse, bad, notFound, conflict, HttpError } from '../lib/core.js';
+import { need, audit, rateLimit } from '../lib/auth.js';
 import { registerCode, normalizeCode } from '../lib/pdv.js';
+import { fetchCatalog, validHandle } from '../lib/ipcatalog.js';
+import { normName } from './possales.js';
+import { normalizeHandle, ipConfig } from '../lib/infinitepay.js';
 
 export const router = Router();
 
@@ -182,6 +185,158 @@ router.get('/products/:id/photo', need('cardapio.visualizar'), h(async (req, res
 router.get('/products/:id/prices', need('cardapio.visualizar'), h(async (req, res) => {
   res.json((await q(`select h.old_cents, h.new_cents, h.created_at, u.name as user_name from product_price_history h left join users u on u.id = h.user_id
                       where h.product_id = $1 and h.company_id = $2 order by h.id desc`, [Number(req.params.id), req.ctx.companyId])).rows);
+}));
+
+// ---------------- Importar cardápio (Loja InfinitePay ou planilha) ----------------
+// 1) /import/infinitepay/fetch lê o catálogo público da InfinitePay (nada é gravado);
+// 2) /import com dry_run mostra o que vai acontecer; 3) /import grava tudo numa transação.
+// Produtos e categorias são casados pelo nome (sem acento/caixa); nomes iguais aos da maquininha também casam pelos apelidos já salvos.
+
+router.post('/import/infinitepay/fetch', need('cardapio.gerenciar'), h(async (req, res) => {
+  const b = parse(z.object({ handle: z.string().trim().max(80).optional() }), req.body);
+  // aceita a tag, $tag ou o endereço da loja (loja.infinitepay.io/tag/...)
+  const typed = String(b.handle || '').trim();
+  const fromUrl = typed.match(/infinitepay\.io\/(?:llms\/)?([^/?#\s]+)/i);
+  let handle = normalizeHandle(fromUrl ? fromUrl[1].replace(/\.md$/i, '') : typed);
+  if (!handle) handle = ipConfig((await q('select settings from companies where id = $1', [req.ctx.companyId])).rows[0]?.settings).handle || '';
+  if (!validHandle(handle)) throw bad('Informe a InfiniteTag da loja (o endereço loja.infinitepay.io/SUA-TAG), sem o $');
+  await rateLimit(`menu-import:${req.ctx.companyId}`, 20, 600);
+  let cat;
+  try { cat = await fetchCatalog(handle); } catch (e) {
+    throw new HttpError(502, e.upstream ? `A InfinitePay não respondeu agora (código ${e.upstream}). Tente de novo em alguns minutos.` : 'Não foi possível ler a loja da InfinitePay agora. Tente de novo em alguns minutos.', 'upstream');
+  }
+  if (!cat) throw notFound(`Não encontrei a loja loja.infinitepay.io/${handle}. Confira a InfiniteTag e se a Loja Online está publicada no app da InfinitePay.`);
+  if (!cat.products.length) throw bad('A loja foi encontrada, mas não tem produtos publicados.');
+  res.json({ handle, ...cat });
+}));
+
+const importItem = z.object({
+  name: z.string().trim().min(1).max(120),
+  category: z.string().trim().max(80).nullable().optional(),
+  price_cents: z.number().int().min(0).max(100000000),
+  available: z.boolean().default(true),
+});
+const importSchema = z.object({
+  source: z.enum(['infinitepay', 'planilha']).default('infinitepay'),
+  dry_run: z.boolean().default(false),
+  items: z.array(importItem).min(1).max(1500),
+  categories: z.array(z.string().trim().min(1).max(80)).max(200).default([]), // ordem da InfinitePay
+  category_sectors: z.record(z.string(), z.number().int().nullable()).default({}),
+  update_prices: z.boolean().default(true),
+  update_categories: z.boolean().default(true),
+  inactive_unavailable: z.boolean().default(true),
+});
+
+// categoria sem produtos ainda: sugere o setor pelo nome (o usuário pode trocar na prévia)
+const SECTOR_HINTS = [
+  [/\b(chop+e?s?|cervejas?|drinks?|doses?|bebidas?|caipirinhas?|coqueteis|vinhos?|destilados?|whisky|gin|bar)\b/, 'bar'],
+  [/\b(cozinha|porcoes|porcao|petiscos?|lanches?|pratos?|comidas?|refeicoes|executivos?|burgers?|hamburgueres|pizzas?|sobremesas?|entradas?|tira gostos?|espetos?|caldos?)\b/, 'cozinha'],
+];
+
+async function importPlan(db, companyId, b) {
+  const cats = (await db.query('select id, name, sort, active from categories where company_id = $1 order by id', [companyId])).rows;
+  const products = (await db.query('select id, name, price_cents, category_id, sector_id, active, demo from products where company_id = $1 order by active desc, demo, id', [companyId])).rows;
+  const sectors = (await db.query('select id, name from production_sectors where company_id = $1 and active order by id', [companyId])).rows;
+  const aliases = (await db.query("select alias_norm, product_id from pos_product_aliases where company_id = $1 and provider = 'infinitepay'", [companyId])).rows;
+  const catByNorm = new Map(); for (const c of cats) if (!catByNorm.has(normName(c.name))) catByNorm.set(normName(c.name), c);
+  const prodByNorm = new Map(); for (const p of products) if (!prodByNorm.has(normName(p.name))) prodByNorm.set(normName(p.name), p);
+  for (const a of aliases) { const p = products.find((x) => Number(x.id) === Number(a.product_id)); if (p && !prodByNorm.has(a.alias_norm)) prodByNorm.set(a.alias_norm, p); }
+
+  // categorias: ordem da InfinitePay, depois as que só aparecem nos itens
+  const order = [];
+  for (const n of [...b.categories, ...b.items.map((i) => i.category).filter(Boolean)]) if (!order.some((x) => normName(x) === normName(n))) order.push(n);
+  let hint = null;
+  const catPlan = order.map((name, i) => {
+    const cur = catByNorm.get(normName(name));
+    const counts = {};
+    if (cur) for (const p of products) if (Number(p.category_id) === Number(cur.id) && p.sector_id) counts[p.sector_id] = (counts[p.sector_id] || 0) + 1;
+    const fromProducts = Object.entries(counts).sort((x, y) => y[1] - x[1])[0]?.[0];
+    const words = normName(name).split(' ');
+    const byName = sectors.find((s) => words.includes(normName(s.name)) || normName(s.name) === normName(name))
+      || (SECTOR_HINTS.some(([re, sec]) => re.test(normName(name)) && (hint = sectors.find((s) => normName(s.name) === sec))) ? hint : null);
+    const suggested = fromProducts ? Number(fromProducts) : byName ? Number(byName.id) : null;
+    const chosen = Object.prototype.hasOwnProperty.call(b.category_sectors, name) ? b.category_sectors[name] : suggested;
+    const sector_id = chosen && sectors.some((s) => Number(s.id) === Number(chosen)) ? Number(chosen) : null;
+    const changes = [];
+    if (cur && !cur.active) changes.push('reativar');
+    if (cur && cur.name !== name) changes.push('renomear');
+    if (cur && cur.sort !== i) changes.push('ordem');
+    return { name, id: cur ? Number(cur.id) : null, current_name: cur?.name ?? null, action: !cur ? 'criar' : changes.length ? 'atualizar' : 'igual', changes, sort: i, sector_id };
+  });
+  const catOf = (n) => (n ? catPlan.find((c) => normName(c.name) === normName(n)) : null);
+
+  const seen = new Set();
+  const items = b.items.map((it) => {
+    const key = normName(it.name);
+    if (!key) return { ...it, action: 'ignorar', reason: 'nome vazio' };
+    if (seen.has(key)) return { ...it, action: 'ignorar', reason: 'repetido no arquivo' };
+    seen.add(key);
+    const cur = prodByNorm.get(key);
+    const c = catOf(it.category);
+    if (!cur) return { ...it, action: 'criar', product_id: null, sector_id: c?.sector_id ?? null, active: it.available || !b.inactive_unavailable };
+    const changes = [];
+    if (b.update_prices && cur.price_cents !== it.price_cents) changes.push('preco');
+    if (b.update_categories && c && Number(cur.category_id) !== c.id) changes.push('categoria');
+    if (!cur.active && it.available) changes.push('reativar');
+    return { ...it, action: changes.length ? 'atualizar' : 'igual', changes, product_id: Number(cur.id), current_name: cur.name, current_price_cents: cur.price_cents, demo: cur.demo };
+  });
+  const sum = (a) => items.filter((x) => x.action === a).length;
+  return {
+    categories: catPlan, items, sectors,
+    summary: { criar: sum('criar'), atualizar: sum('atualizar'), igual: sum('igual'), ignorar: sum('ignorar'),
+      categorias_criar: catPlan.filter((c) => c.action === 'criar').length, categorias_atualizar: catPlan.filter((c) => c.action === 'atualizar').length },
+  };
+}
+
+router.post('/import', need('cardapio.gerenciar'), h(async (req, res) => {
+  const b = parse(importSchema, req.body);
+  if (b.dry_run) { res.json(await importPlan({ query: q }, req.ctx.companyId, b)); return; }
+  const out = await tx(async (db) => {
+    await db.query('select id from companies where id = $1 for update', [req.ctx.companyId]); // uma importação por vez
+    const plan = await importPlan(db, req.ctx.companyId, b);
+    const catIds = new Map();
+    for (const c of plan.categories) {
+      if (c.action === 'criar') {
+        const r = await db.query('insert into categories (company_id, name, sort) values ($1,$2,$3) returning id', [req.ctx.companyId, c.name, c.sort]);
+        c.id = Number(r.rows[0].id);
+      } else if (c.action === 'atualizar') {
+        await db.query('update categories set name = $3, sort = $4, active = true where id = $1 and company_id = $2', [c.id, req.ctx.companyId, c.name, c.sort]);
+      }
+      catIds.set(normName(c.name), c);
+    }
+    const cat = (n) => (n ? catIds.get(normName(n)) : null);
+    let created = 0; let updated = 0; let prices = 0;
+    for (const it of plan.items) {
+      const c = cat(it.category);
+      if (it.action === 'criar') {
+        const r = await db.query(
+          `insert into products (company_id, name, kind, unit, price_cents, cost_cents, category_id, sector_id, active, channels)
+           values ($1,$2,'resale','un',$3,0,$4,$5,$6,'{pdv}') returning id`,
+          [req.ctx.companyId, it.name, it.price_cents, c?.id ?? null, c?.sector_id ?? null, it.active]);
+        it.product_id = Number(r.rows[0].id);
+        await db.query('insert into product_price_history (company_id, product_id, old_cents, new_cents, user_id) values ($1,$2,null,$3,$4)', [req.ctx.companyId, it.product_id, it.price_cents, req.ctx.userId]);
+        created++;
+      } else if (it.action === 'atualizar') {
+        const price = it.changes.includes('preco');
+        await db.query(`update products set price_cents = case when $3 then $4 else price_cents end, category_id = case when $5 then $6 else category_id end,
+                          active = active or $7, updated_at = now() where id = $1 and company_id = $2`,
+          [it.product_id, req.ctx.companyId, price, it.price_cents, it.changes.includes('categoria'), c?.id ?? null, it.changes.includes('reativar')]);
+        if (price) {
+          await db.query('insert into product_price_history (company_id, product_id, old_cents, new_cents, user_id) values ($1,$2,$3,$4,$5)', [req.ctx.companyId, it.product_id, it.current_price_cents, it.price_cents, req.ctx.userId]);
+          prices++;
+        }
+        updated++;
+      }
+      // mesmo nome da maquininha → baixa de estoque casa sozinha nas próximas importações de vendas
+      if (b.source === 'infinitepay' && it.product_id && it.action !== 'ignorar')
+        await db.query(`insert into pos_product_aliases (company_id, provider, alias_norm, product_id) values ($1,'infinitepay',$2,$3)
+          on conflict (company_id, provider, alias_norm) do update set product_id = excluded.product_id, updated_at = now()`, [req.ctx.companyId, normName(it.name), it.product_id]);
+    }
+    const result = { created, updated, prices, unchanged: plan.summary.igual, categories_created: plan.summary.categorias_criar, categories_updated: plan.summary.categorias_atualizar };
+    await audit(db, req.ctx, 'cardapio.importado', { data: { source: b.source, ...result } });
+    return result;
+  });
+  res.json(out);
 }));
 
 // Remove dados de demonstração sem tocar em transações: produtos já vendidos são apenas desativados

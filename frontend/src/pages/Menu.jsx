@@ -1,7 +1,8 @@
 // Cardápio: produtos, preços, códigos de leitura, opções e categorias.
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { BookOpen, ImagePlus, Plus, Trash2 } from 'lucide-react';
+import { BookOpen, Download, ImagePlus, Plus, Trash2 } from 'lucide-react';
+import MenuImport from './MenuImport.jsx';
 import { api } from '../lib/api.js';
 import { money, parseCents, centsToInput, dateTime } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
@@ -16,6 +17,7 @@ export default function Menu() {
   const [cat, setCat] = useState('');
   const [edit, setEdit] = useState(null);
   const [catModal, setCatModal] = useState(false);
+  const [importing, setImporting] = useState(false);
   const products = useLoad(() => api('/api/menu/products?active=all'));
   const cats = useLoad(() => api('/api/menu/categories'));
   const sectors = useLoad(() => api('/api/menu/sectors'));
@@ -31,12 +33,12 @@ export default function Menu() {
   return (
     <div>
       <PageHeader title="Cardápio" subtitle="Preços, códigos de leitura e opções valem igualmente em todos os modos do PDV"
-        actions={manage && <><button className="btn-ghost" onClick={() => setCatModal(true)}>Categorias</button><button className="btn-primary" onClick={() => setEdit({})}><Plus size={16} /> Novo produto</button></>} />
+        actions={manage && <><button className="btn-ghost" onClick={() => setImporting(true)}><Download size={16} /> Importar da InfinitePay</button><button className="btn-ghost" onClick={() => setCatModal(true)}>Categorias</button><button className="btn-primary" onClick={() => setEdit({})}><Plus size={16} /> Novo produto</button></>} />
       <div className="mb-3 flex flex-wrap gap-2">
         <input className="input max-w-xs" placeholder="Buscar por nome, SKU ou código" value={q} onChange={(e) => setQ(e.target.value)} />
         <select className="input max-w-[220px]" value={cat} onChange={(e) => setCat(e.target.value)}><option value="">Todas as categorias</option>{cats.data.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
       </div>
-      {!list.length ? <Empty icon={BookOpen} title="Nenhum produto">{products.data.length ? 'Nada encontrado com esse filtro.' : 'Cadastre o primeiro produto do cardápio.'}</Empty> : (
+      {!list.length ? <Empty icon={BookOpen} title="Nenhum produto">{products.data.length ? 'Nada encontrado com esse filtro.' : <>Cadastre o primeiro produto do cardápio{manage && <> ou <button className="underline" onClick={() => setImporting(true)}>importe o cardápio da InfinitePay</button></>}.</>}</Empty> : (
         <div className="card overflow-x-auto">
           <table className="table-clean">
             <thead><tr><th>Produto</th><th>Categoria</th><th>Tipo</th><th className="text-right">Preço</th>{list[0]?.cost_cents !== undefined && <th className="text-right">Custo</th>}<th>Códigos</th><th>Situação</th></tr></thead>
@@ -57,6 +59,7 @@ export default function Menu() {
         </div>
       )}
       {edit && <ProductForm product={edit} cats={cats.data} sectors={sectors.data || []} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); products.reload(); }} />}
+      {manage && <MenuImport open={importing} onClose={() => setImporting(false)} onDone={() => { products.reload(); cats.reload(); }} />}
       <CategoriesModal open={catModal} cats={cats.data} onClose={() => setCatModal(false)} onChanged={cats.reload} />
     </div>
   );

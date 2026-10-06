@@ -1292,12 +1292,45 @@ await check('cardápio: importar (InfinitePay/planilha) cria e atualiza categori
   const r2 = await apiC('POST', '/api/menu/import', { source: 'planilha', items: [{ name: 'chopp pilsen 300ml', category: 'Chopp e Cerveja', price_cents: 1400, available: true }] });
   assert.equal(r2.status, 200, JSON.stringify(r2.data)); assert.equal(r2.data.created, 0); assert.equal(r2.data.updated, 1); assert.equal(r2.data.categories_created, 0);
   const cats2 = (await apiC('GET', '/api/menu/categories')).data;
-  assert.equal(cats2.length, cats.length); assert.ok(cats2.find((c) => c.name === 'Chopp e Cerveja'));
+  assert.equal(cats2.length, cats.length); assert.ok(cats2.find((c) => c.name === 'CHOPP e CERVEJA')); // planilha não renomeia a categoria existente
   assert.equal((await apiC('GET', '/api/menu/products?active=all')).data.filter((p) => /chopp pilsen 300ml/i.test(p.name)).length, 1);
   // outra empresa não enxerga nem altera; sem InfiniteTag válida → 400; sem permissão de cardápio, nada
   assert.equal((await pool.query("select count(*)::int n from products where name = 'Batata frita G' and company_id <> (select company_id from products where id = $1)", [batata.id])).rows[0].n, 0);
   assert.equal((await apiC('POST', '/api/menu/import/infinitepay/fetch', { handle: '../evil.com/x' })).status, 400);
   assert.equal((await apiC('POST', '/api/menu/import', { items: [] })).status, 400);
+});
+await check('cardápio: planilha com categoria nova pede indicação (usar existente ou criar), importa código, custo e situação; exporta', async () => {
+  const cats0 = (await apiC('GET', '/api/menu/categories')).data;
+  const target = cats0.find((c) => c.name === 'COZINHA');
+  const items = [
+    { line: 2, name: 'AMSTEL TESTE', category: 'CERVEJAS TESTE', price_cents: 1299, cost_cents: 459, sku: '9372', codes: ['7890000000017'], unit: 'un', available: true },
+    { line: 3, name: 'MALZBIER TESTE', category: 'CERVEJAS TESTE', price_cents: 1099, cost_cents: 539, sku: '9148', codes: [], available: false },
+    { line: 4, name: 'ISCA TESTE', category: 'PORÇÕES TESTE', price_cents: 4590, cost_cents: 1800, sku: '9373', codes: ['7890000000017'], available: true },
+  ];
+  const pv = await apiC('POST', '/api/menu/import', { source: 'arquivo', items, dry_run: true });
+  assert.equal(pv.status, 200, JSON.stringify(pv.data));
+  assert.deepEqual(pv.data.unresolved.sort(), ['CERVEJAS TESTE', 'PORÇÕES TESTE']);
+  assert.ok(pv.data.items[2].warnings.length); // código de barras repetido na planilha não entra duas vezes
+  const noMap = await apiC('POST', '/api/menu/import', { source: 'arquivo', items });
+  assert.equal(noMap.status, 400); assert.equal(noMap.data.code, 'category_unresolved');
+  const map = { 'CERVEJAS TESTE': { create: true }, 'PORÇÕES TESTE': { category_id: target.id } };
+  const r = await apiC('POST', '/api/menu/import', { source: 'arquivo', items, category_map: map });
+  assert.equal(r.status, 200, JSON.stringify(r.data)); assert.equal(r.data.created, 3); assert.equal(r.data.categories_created, 1);
+  const cats = (await apiC('GET', '/api/menu/categories')).data;
+  assert.ok(cats.find((c) => c.name === 'CERVEJAS TESTE')); assert.ok(!cats.find((c) => c.name === 'PORÇÕES TESTE'));
+  const ps = (await apiC('GET', '/api/menu/products?active=all')).data;
+  const amstel = ps.find((p) => p.name === 'AMSTEL TESTE');
+  assert.equal(amstel.sku, '9372'); assert.equal(amstel.cost_cents, 459); assert.deepEqual(amstel.codes, ['7890000000017']);
+  assert.equal(ps.find((p) => p.name === 'MALZBIER TESTE').active, false);
+  assert.equal(ps.find((p) => p.name === 'ISCA TESTE').category_id, target.id);
+  // reimportar pelo código (nome mudou) atualiza preço e custo, sem duplicar
+  const r2 = await apiC('POST', '/api/menu/import', { source: 'arquivo', items: [{ name: 'AMSTEL ULTRA TESTE', category: 'CERVEJAS TESTE', price_cents: 1399, cost_cents: 500, sku: '9372', codes: [], available: true }] });
+  assert.equal(r2.status, 200, JSON.stringify(r2.data)); assert.equal(r2.data.created, 0); assert.equal(r2.data.updated, 1);
+  const a2 = (await apiC('GET', '/api/menu/products?active=all')).data.find((p) => p.id === amstel.id);
+  assert.equal(a2.price_cents, 1399); assert.equal(a2.cost_cents, 500);
+  const ex = await apiC('GET', '/api/menu/export');
+  assert.equal(ex.status, 200); const row = ex.data.find((x) => x.sku === '9372');
+  assert.equal(row.category, 'CERVEJAS TESTE'); assert.equal(row.codes, '7890000000017'); assert.equal(row.price_cents, 1399);
 });
 await check('clientes: importar planilha marca repetidos/já cadastrados e grava só as linhas escolhidas', async () => {
   const rows = [

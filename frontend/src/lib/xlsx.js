@@ -79,3 +79,27 @@ export const excelDate = (v) => {
   if (!/^\d+(\.\d+)?$/.test(String(v)) || n < 1 || n > 80000) return null;
   return new Date(Math.round((n - 25569) * 86400000)).toISOString().slice(0, 10);
 };
+
+/** CSV (; , ou tab) → linhas na posição do arquivo (linha vazia = []) */
+export function csvGrid(text) {
+  const lines = String(text || '').replace(/^\uFEFF/, '').split(/\r?\n/);
+  const first = lines.find((l) => l.trim()) || '';
+  const sep = ['\t', ';', ','].map((s) => [s, first.split(s).length]).sort((a, b) => b[1] - a[1])[0][0];
+  const split = (l) => {
+    const out = []; let cur = ''; let qd = false;
+    for (let i = 0; i < l.length; i++) {
+      const ch = l[i];
+      if (qd) { if (ch === '"' && l[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') qd = false; else cur += ch; }
+      else if (ch === '"' && !cur.trim()) qd = true; else if (ch === sep) { out.push(cur); cur = ''; } else cur += ch;
+    }
+    out.push(cur); return out.map((x) => x.trim());
+  };
+  return lines.map((l) => (l.trim() ? split(l) : []));
+}
+
+/** Lê .xlsx ou .csv escolhido pelo usuário. */
+export async function readSheetFile(file) {
+  if (/\.xlsx$/i.test(file.name)) return readXlsx(await file.arrayBuffer());
+  if (/\.xls$/i.test(file.name)) throw new Error('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
+  return csvGrid(await file.text());
+}

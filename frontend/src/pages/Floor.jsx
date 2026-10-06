@@ -2,15 +2,16 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import ReviewLinkModal from '../components/ReviewLink.jsx';
-import { Armchair, CalendarDays, ChefHat, CircleDot, LayoutGrid, List, Lock, Merge, Printer, Unlock } from 'lucide-react';
+import { Armchair, CalendarDays, ChefHat, CircleDot, LayoutGrid, List, Lock, Merge, MoreVertical, Printer, Sparkles, Unlock } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { money, time } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
-import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHeader, useLoad, useToast } from '../components/ui.jsx';
+import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHeader, useAsk, useLoad, useToast } from '../components/ui.jsx';
 
 const STATUS = {
   livre: ['ok', 'Livre'], ocupada: ['info', 'Ocupada'], reservada: ['warn', 'Reservada'], conta: ['warn', 'Conta pedida'], limpeza: ['muted', 'Limpeza'],
 };
+const STATUS_HINT = { limpeza: 'Conta encerrada: libere quando a mesa estiver limpa.', reservada: 'Separada para uma reserva.', conta: 'O cliente pediu a conta.' };
 
 export default function Floor() {
   const s = useSession();
@@ -67,8 +68,10 @@ function Tables({ s }) {
             {tables.filter((t) => t.area === area).map((t) => {
               const [tone, label] = STATUS[t.status];
               return (
-                <button key={t.id} onClick={() => setSel(t)}
-                  className={`card flex min-h-[104px] flex-col items-center justify-center p-2 transition hover:border-copper ${t.status === 'ocupada' || t.status === 'conta' ? 'stripe' : ''}`}>
+                <div key={t.id} className="relative">
+                <button onClick={() => (t.status === 'livre' && s.can('pdv.lancar') ? openTable(t) : setSel(t))} data-table={t.number}
+                  title={t.status === 'livre' ? 'Toque para abrir a mesa no PDV' : STATUS_HINT[t.status] || 'Ver a mesa'}
+                  className={`card flex min-h-[104px] w-full flex-col items-center justify-center p-2 transition hover:border-copper ${t.status === 'ocupada' || t.status === 'conta' ? 'stripe' : ''} ${t.status === 'limpeza' ? 'pb-12' : ''}`}>
                   <span className="font-display text-4xl leading-none">{t.number}</span>
                   <Badge tone={tone}>{label}</Badge>
                   {t.customer_names && <span className="mt-1 max-w-full truncate text-xs font-semibold" title={t.customer_names}>{t.customer_names}</span>}
@@ -78,6 +81,15 @@ function Tables({ s }) {
                     {t.consumed_cents > 0 && <span>{money(t.consumed_cents)}</span>}
                   </span>
                 </button>
+                {t.status === 'livre' && (
+                  <button className="absolute right-0 top-0 flex h-11 w-11 items-center justify-center rounded-lg text-muted hover:bg-raised" onClick={() => setSel(t)}
+                    aria-label={`Opções da mesa ${t.number} (reservar, limpeza)`} title="Reservar ou marcar limpeza"><MoreVertical size={16} /></button>
+                )}
+                {t.status === 'limpeza' && (
+                  <button className="absolute inset-x-2 bottom-2 flex min-h-[40px] items-center justify-center gap-1 rounded-lg border border-ok/50 bg-ok/10 text-sm font-semibold text-ok"
+                    onClick={() => setStatus(t, 'livre')} data-free-table={t.number}><Sparkles size={14} /> Liberar</button>
+                )}
+                </div>
               );
             })}
           </div>
@@ -85,14 +97,16 @@ function Tables({ s }) {
       ))}
       <Modal open={!!sel} onClose={() => setSel(null)} title={`Mesa ${sel?.number}`}>
         {sel && <>
-          <p className="text-sm text-muted">{sel.area} · {sel.capacity} lugares · {sel.open_sessions} consumo(s) aberto(s)</p>
+          <p className="text-sm text-muted">{sel.area} · {sel.capacity} lugares · {sel.open_sessions ? `${sel.open_sessions} conta(s) aberta(s)` : 'sem conta aberta'}</p>
+          {STATUS_HINT[sel.status] && <p className="mt-1 text-sm"><Badge tone={STATUS[sel.status][0]}>{STATUS[sel.status][1]}</Badge> {STATUS_HINT[sel.status]}</p>}
           {sel.customer_names && <p className="mt-1 font-semibold">{sel.customer_names}</p>}
           {s.can('pdv.lancar') && <button className="btn-primary btn-xl mt-3 w-full" onClick={() => openTable(sel)}>{sel.open_sessions ? 'Ir para o consumo' : 'Abrir mesa no PDV'}</button>}
           {sel.open_sessions > 0 && s.can('pdv.transferir_item') && <button className="btn-ghost mt-2 w-full" onClick={() => joinTable(sel)}><Merge size={16} /> Juntar com outra mesa ou comanda</button>}
           <div className="mt-3 grid grid-cols-2 gap-2">
-            {['livre', 'reservada', 'limpeza'].map((k) => <button key={k} className="btn-ghost" disabled={sel.status === k || (k === 'livre' && sel.open_sessions > 0)} onClick={() => setStatus(sel, k)}>Marcar {STATUS[k][1].toLowerCase()}</button>)}
+            {['livre', 'reservada', 'limpeza'].filter((k) => sel.status !== k).map((k) => <button key={k} className="btn-ghost" aria-disabled={(k === 'livre' && sel.open_sessions > 0) || undefined} data-why="Essa mesa tem conta aberta: receba e encerre antes de liberar."
+              onClick={() => (k === 'livre' && sel.open_sessions > 0 ? toast('Essa mesa tem conta aberta: receba e encerre antes de liberar.', 'warn') : setStatus(sel, k))}>Marcar {STATUS[k][1].toLowerCase()}</button>)}
           </div>
-          {sel.open_sessions > 0 && <p className="mt-2 text-xs text-muted">Mesa com consumo aberto não pode ser marcada como livre.</p>}
+          {sel.open_sessions > 0 && <p className="mt-2 text-xs text-muted">Mesa com conta aberta não pode ser marcada como livre: receba e encerre a conta antes.</p>}
           {sel.code && <p className="mt-3 text-xs text-muted">Código da mesa: <span className="font-mono">{sel.code}</span></p>}
         </>}
       </Modal>
@@ -124,30 +138,40 @@ function AddTables({ open, onClose, next, onDone }) {
 
 function Cards({ s }) {
   const toast = useToast();
+  const ask = useAsk();
   const nav = useNavigate();
   // comanda em uso: clicar em qualquer ponto do cartão (ou da linha) abre o consumo; botões e links internos seguem com a própria ação
+  // comanda livre: o toque abre a conta e vai direto ao PDV
+  const startCard = async (c) => {
+    if (c.status !== 'ativo') return toast(`Comanda ${c.number} bloqueada${c.block_reason ? `: ${c.block_reason}` : ''}. Desbloqueie para usar.`, 'warn');
+    if (!s.can('pdv.abrir_comanda')) return toast('Seu perfil não pode abrir comandas. Peça ao caixa ou gerente.', 'warn');
+    try { const r = await api('/api/pdv/sessions', { method: 'POST', body: { kind: 'comanda', card_id: c.id } }); nav(`/pdv?sessao=${r.id}`); }
+    catch (e) { toast(e.message, 'bad'); }
+  };
   const openCard = (c) => (e) => {
-    if (!c.session_id || e.target.closest('button, a, input, select, label')) return;
+    if (e.target.closest('button, a, input, select, label')) return;
+    if (!c.session_id) { startCard(c); return; }
     nav(`/pdv?sessao=${c.session_id}`);
   };
-  const openKey = (c) => (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget && c.session_id) { e.preventDefault(); nav(`/pdv?sessao=${c.session_id}`); } };
+  const openKey = (c) => (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); if (c.session_id) nav(`/pdv?sessao=${c.session_id}`); else startCard(c); } };
   const { data, loading, error, reload } = useLoad(() => api('/api/floor/cards'));
   const [gen, setGen] = useState(false);
   const [replace, setReplace] = useState(null);
   const [view, setView] = useState(() => { try { return localStorage.getItem('rusten.comandas.view') || 'cartoes'; } catch { return 'cartoes'; } });
-  const [filter, setFilter] = useState('uso');
+  const [filter, setFilter] = useState(null); // padrão: Em uso; sem nenhuma em uso, Livres
   const [term, setTerm] = useState('');
   const [join, setJoin] = useState(null);
   if (loading) return <Loading />;
   if (error) return <ErrorBox error={error} onRetry={reload} />;
   const cards = data.cards;
+  const filterNow = filter || (cards.some((c) => c.session_id) ? 'uso' : 'livres');
   const manage = s.can('comandas.gerenciar');
   const canJoin = s.can('pdv.transferir_item');
   const setV = (v) => { setView(v); try { localStorage.setItem('rusten.comandas.view', v); } catch { /* sem armazenamento */ } };
   const t = term.trim().toLowerCase();
-  const shown = cards.filter((c) => (filter === 'uso' ? c.session_id : filter === 'livres' ? c.status === 'ativo' && !c.session_id : filter === 'bloqueadas' ? c.status === 'bloqueado' : true))
+  const shown = cards.filter((c) => (filterNow === 'uso' ? c.session_id : filterNow === 'livres' ? c.status === 'ativo' && !c.session_id : filterNow === 'bloqueadas' ? c.status === 'bloqueado' : true))
     .filter((c) => !t || String(c.number) === t || (c.customer_name || '').toLowerCase().includes(t) || (c.code || '').toLowerCase().includes(t));
-  const block = async (c) => { const reason = prompt(`Motivo do bloqueio da comanda ${c.number}:`); if (!reason) return; try { await api(`/api/floor/cards/${c.id}/block`, { method: 'POST', body: { reason } }); reload(); } catch (e) { toast(e.message, 'bad'); } };
+  const block = async (c) => { const reason = await ask.reason({ title: `Bloquear comanda ${c.number}`, confirmLabel: 'Bloquear', reasons: ['Cartão perdido', 'Cartão danificado', 'Código ilegível'] }); if (!reason) return; try { await api(`/api/floor/cards/${c.id}/block`, { method: 'POST', body: { reason } }); reload(); } catch (e) { toast(e.message, 'bad'); } };
   const unblock = async (c) => { try { await api(`/api/floor/cards/${c.id}/unblock`, { method: 'POST' }); reload(); } catch (e) { toast(e.message, 'bad'); } };
   const print = () => {
     const w = window.open('', '_blank'); if (!w) return toast('Permita pop-ups para imprimir', 'warn');
@@ -174,10 +198,10 @@ function Cards({ s }) {
     <>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Filtrar">
-          {FILTERS.map(([k, l]) => <button key={k} role="radio" aria-checked={filter === k} onClick={() => setFilter(k)}
-            className={`rounded-full border px-3 py-1.5 text-sm font-semibold ${filter === k ? 'border-copper bg-copper text-white dark:text-black' : 'border-line bg-surface hover:bg-raised'}`}>{l}</button>)}
+          {FILTERS.map(([k, l]) => <button key={k} role="radio" aria-checked={filterNow === k} onClick={() => setFilter(k)}
+            className={`min-h-[44px] rounded-full border px-4 text-sm font-semibold ${filterNow === k ? 'border-copper bg-copper text-white dark:text-black' : 'border-line bg-surface hover:bg-raised'}`}>{l}</button>)}
         </div>
-        <input className="input w-56" placeholder="Número, nome ou código" value={term} onChange={(e) => setTerm(e.target.value)} aria-label="Buscar comanda" />
+        <input className="input w-full sm:w-56" placeholder="Número, nome ou código" value={term} onChange={(e) => setTerm(e.target.value)} aria-label="Buscar comanda" />
         <div className="ml-auto flex flex-wrap gap-2">
           <div className="flex rounded-lg border border-line bg-surface p-0.5" role="radiogroup" aria-label="Exibição">
             {[['cartoes', LayoutGrid, 'Cartões'], ['lista', List, 'Lista']].map(([k, I, l]) => (
@@ -185,17 +209,18 @@ function Cards({ s }) {
                 className={`flex items-center gap-1 rounded-md px-3 py-1.5 text-sm font-semibold ${view === k ? 'bg-copper text-white dark:text-black' : 'text-muted hover:text-ink'}`}><I size={15} /> {l}</button>))}
           </div>
           {canJoin && <button className="btn-ghost" onClick={() => setJoin({})}><Merge size={16} /> Juntar comandas e mesas</button>}
-          <button className="btn-ghost" onClick={print}><Printer size={16} /> Relação de códigos</button>
+          <button className="btn-ghost" onClick={print} title="Lista para imprimir as etiquetas (código de barras ou QR) dos cartões"><Printer size={16} /> Relação de códigos</button>
           {manage && <button className="btn-primary" onClick={() => setGen(true)}>Gerar em lote</button>}
         </div>
       </div>
       {!cards.length ? <Empty title="Nenhum cartão">Gere cartões numerados para usar comandas físicas.</Empty>
-        : !shown.length ? <Empty title="Nada nesta seleção">{filter === 'uso' ? 'Nenhuma comanda em uso agora.' : 'Ajuste o filtro ou a busca.'}</Empty>
+        : !shown.length ? <Empty title="Nada nesta seleção">{filterNow === 'uso' ? 'Nenhuma comanda em uso agora.' : 'Ajuste o filtro ou a busca.'}</Empty>
         : view === 'cartoes' ? (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
             {shown.map((c) => (
-              <div key={c.id} className={`card flex min-h-[132px] flex-col p-3 ${c.session_id ? 'stripe cursor-pointer transition hover:border-copper hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-copper' : ''} ${c.status === 'bloqueado' ? 'opacity-60' : ''}`}
-                data-card={c.number} onClick={openCard(c)} onKeyDown={openKey(c)} {...(c.session_id ? { role: 'link', tabIndex: 0, 'aria-label': `Abrir comanda ${c.number}${c.customer_name ? ` de ${c.customer_name}` : ''}` } : {})}>
+              <div key={c.id} className={`card flex min-h-[132px] cursor-pointer flex-col p-3 transition hover:border-copper hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-copper ${c.session_id ? 'stripe' : ''} ${c.status === 'bloqueado' ? 'opacity-60' : ''}`}
+                data-card={c.number} onClick={openCard(c)} onKeyDown={openKey(c)} role="button" tabIndex={0}
+                aria-label={c.session_id ? `Abrir comanda ${c.number}${c.customer_name ? ` de ${c.customer_name}` : ''}` : `Começar a usar a comanda ${c.number}`}>
                 <div className="flex items-start justify-between gap-2">
                   <span className="font-display text-4xl leading-none">{c.number}</span>
                   {situation(c)}
@@ -204,7 +229,7 @@ function Cards({ s }) {
                 {c.session_id && <AccountChip cents={c.account_cents} />}
                 {c.session_id ? (
                   <a href={`/pdv?sessao=${c.session_id}`} className="text-xs text-muted hover:underline">{c.item_count} item(ns){c.items_cents > 0 ? ` · ${money(c.items_cents)}` : ''}{c.table_number ? ` · Mesa ${c.table_number}` : ''}{c.opened_at ? ` · desde ${time(c.opened_at, s.tz)}` : ''}</a>
-                ) : <span className="font-mono text-[10px] text-muted">{c.code}</span>}
+                ) : c.status === 'ativo' ? <span className="text-xs font-semibold text-copper">Toque para abrir</span> : <span className="font-mono text-[11px] text-muted">{c.code}</span>}
                 <div className="mt-auto pt-2 text-right">{actions(c)}</div>
               </div>
             ))}
@@ -215,7 +240,7 @@ function Cards({ s }) {
               <thead><tr><th>Nº</th><th>Cliente</th><th>Situação</th><th>Consumo</th><th>Código</th><th /></tr></thead>
               <tbody>
                 {shown.map((c) => (
-                  <tr key={c.id} onClick={openCard(c)} className={c.session_id ? 'cursor-pointer hover:bg-raised' : ''}>
+                  <tr key={c.id} onClick={openCard(c)} className="cursor-pointer hover:bg-raised">
                     <td className="font-display text-xl">{c.number}</td>
                     <td className="font-semibold">{c.customer_name || (c.session_id ? <span className="font-normal text-muted">sem nome</span> : '—')}{c.session_id && <span className="ml-2"><AccountChip cents={c.account_cents} /></span>}</td>
                     <td>{situation(c)}</td>
@@ -270,7 +295,7 @@ export function JoinModal({ open, preset, onClose, onDone }) {
   return (
     <Modal open wide onClose={onClose} title="Juntar comandas e mesas"
       footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button>
-        <button className="btn-primary" disabled={busy || !tgt || !chosen.length || paidSrc.length > 0 || reason.trim().length < 3} onClick={go}>
+        <button className="btn-primary" disabled={busy} aria-disabled={(!tgt || !chosen.length || paidSrc.length > 0 || reason.trim().length < 3) || undefined} data-why={!chosen.length ? 'Marque o que vai ser juntado' : !tgt ? 'Escolha o destino' : paidSrc.length ? 'Uma das origens já tem pagamento' : 'Escreva o motivo'} onClick={go}>
           <Merge size={16} /> {busy ? 'Juntando…' : `Juntar ${chosen.length || ''} em ${tgt && list ? sessName(list.find((x) => x.id === tgt) || {}) : '…'}`}</button></>}>
       {!list ? <Loading /> : list.length < 2 ? <p className="text-sm text-muted">É preciso ter ao menos dois consumos abertos para juntar.</p> : (
         <div className="grid gap-4 md:grid-cols-2">
@@ -331,7 +356,7 @@ function ReplaceCard({ card, cards, onClose, onDone }) {
     catch (e) { setErr(e); }
   };
   return (
-    <Modal open onClose={onClose} title={`Substituir comanda ${card.number}`} footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" disabled={reason.trim().length < 3} onClick={go}>Substituir</button></>}>
+    <Modal open onClose={onClose} title={`Substituir comanda ${card.number}`} footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" aria-disabled={(reason.trim().length < 3) || undefined} data-why={'Escreva o motivo (ex.: cartão perdido)'} onClick={go}>Substituir</button></>}>
       <p className="text-sm">O cartão {card.number} será bloqueado e o consumo aberto passa para o novo cartão, mantendo itens, pagamentos e histórico.</p>
       <Field label="Novo cartão (número)" className="mt-3"><input className="input" list="free-c" value={to} onChange={(e) => setTo(e.target.value)} /><datalist id="free-c">{free.map((c) => <option key={c.id} value={c.number} />)}</datalist></Field>
       <Field label="Motivo" className="mt-3"><input className="input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>

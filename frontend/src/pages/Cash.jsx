@@ -1,7 +1,8 @@
 // Caixa do terminal: abertura, sangria/suprimento/despesa, fechamento cego com contador de cédulas e histórico.
 import { useState } from 'react';
 import { Banknote } from 'lucide-react';
-import { api } from '../lib/api.js';
+import { api, terminal } from '../lib/api.js';
+import { prefs } from '../lib/prefs.js';
 import { money, parseCents, centsToInput, dateTime, dateBR } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
 import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHeader, useLoad, useToast } from '../components/ui.jsx';
@@ -17,7 +18,8 @@ export default function Cash() {
   const toast = useToast();
   const cur = useLoad(() => api('/api/cash/current'));
   const hist = useLoad(() => (s.can('financeiro.visualizar') ? api('/api/cash') : Promise.resolve(null)));
-  const [opening, setOpening] = useState('0,00');
+  const lastKey = `rusten.cash.opening.${terminal.id || 'x'}`;
+  const [opening, setOpening] = useState(() => prefs.get(lastKey, '0,00')); // sugere o troco usado na última abertura deste terminal
   const [mov, setMov] = useState(null);
   const [closing, setClosing] = useState(false);
   const [result, setResult] = useState(null);
@@ -27,7 +29,7 @@ export default function Cash() {
   const c = cur.data;
   const open = async () => {
     setErr(null);
-    try { const v = parseCents(opening); if (v == null) throw new Error('Valor inválido'); await api('/api/cash/open', { method: 'POST', body: { opening_cents: v } }); toast('Caixa aberto'); cur.reload(); hist.reload(); }
+    try { const v = parseCents(opening); if (v == null) throw new Error('Valor inválido'); await api('/api/cash/open', { method: 'POST', body: { opening_cents: v } }); prefs.set(lastKey, centsToInput(v)); toast('Caixa aberto'); cur.reload(); hist.reload(); }
     catch (e) { setErr(e); }
   };
   return (
@@ -47,7 +49,8 @@ export default function Cash() {
         s.can('caixa.abrir') ? (
           <div className="card max-w-md p-5">
             <div className="flex items-center gap-2"><Banknote className="text-copper" /><h2 className="font-display text-2xl">Abrir caixa</h2></div>
-            <Field label="Troco inicial (R$)" className="mt-3"><input className="input text-2xl" inputMode="decimal" value={opening} onChange={(e) => setOpening(e.target.value)} /></Field>
+            <Field label="Troco inicial (R$)" hint="Dinheiro que já está na gaveta para dar troco. Sugerimos o valor da última abertura deste terminal." className="mt-3"><input className="input text-2xl" inputMode="decimal" value={opening} onChange={(e) => setOpening(e.target.value)} data-autofocus /></Field>
+            <div className="mt-2 flex flex-wrap gap-2">{[0, 5000, 10000, 20000].map((v) => <button key={v} type="button" className="chip min-h-[40px] border-line px-3" onClick={() => setOpening(centsToInput(v))}>{money(v)}</button>)}</div>
             <button className="btn-primary btn-xl mt-3 w-full" onClick={open}>Abrir caixa</button>
             <div className="mt-3"><ErrorBox error={err} /></div>
           </div>
@@ -58,9 +61,9 @@ export default function Cash() {
             <div className="flex items-center justify-between"><h2 className="font-display text-2xl">Caixa aberto</h2><Badge tone="ok">Aberto</Badge></div>
             <p className="text-sm text-muted">Por {c.cash.user_name} em {dateTime(c.cash.opened_at, s.tz)} · dia comercial {dateBR(c.cash.business_date)} · troco inicial {money(c.cash.opening_cents)}</p>
             <div className="mt-4 grid grid-cols-3 gap-2">
-              {s.can('caixa.sangria') && <button className="btn-ghost" onClick={() => setMov('sangria')}>Sangria</button>}
-              {s.can('caixa.suprimento') && <button className="btn-ghost" onClick={() => setMov('suprimento')}>Suprimento</button>}
-              {s.can('caixa.sangria') && <button className="btn-ghost" onClick={() => setMov('despesa')}>Despesa</button>}
+              {s.can('caixa.sangria') && <button className="btn-ghost flex-col gap-0 py-2" onClick={() => setMov('sangria')}>Sangria<span className="text-[11px] font-normal text-muted">tirar dinheiro</span></button>}
+              {s.can('caixa.suprimento') && <button className="btn-ghost flex-col gap-0 py-2" onClick={() => setMov('suprimento')}>Suprimento<span className="text-[11px] font-normal text-muted">pôr troco</span></button>}
+              {s.can('caixa.sangria') && <button className="btn-ghost flex-col gap-0 py-2" onClick={() => setMov('despesa')}>Despesa<span className="text-[11px] font-normal text-muted">pagar algo</span></button>}
             </div>
             {s.can('caixa.fechar') && <button className="btn-danger btn-xl mt-4 w-full" onClick={() => setClosing(true)}>Fechar caixa</button>}
           </div>
@@ -106,7 +109,8 @@ function MovementModal({ kind, cashId, onClose, onDone }) {
   };
   return (
     <Modal open onClose={onClose} title={{ sangria: 'Sangria', suprimento: 'Suprimento', despesa: 'Despesa de caixa' }[kind]}
-      footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" disabled={reason.trim().length < 3} onClick={go}>Registrar</button></>}>
+      footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" onClick={() => (reason.trim().length < 3 ? setErr(new Error('Escreva o motivo (mínimo de 3 letras)')) : go())}>Registrar</button></>}>
+      <p className="mb-3 text-sm text-muted">{{ sangria: 'Retirada de dinheiro da gaveta (ex.: levar ao cofre ou ao banco).', suprimento: 'Entrada de dinheiro na gaveta para ter troco.', despesa: 'Pagamento feito com o dinheiro do caixa (ex.: gelo, entregador).' }[kind]}</p>
       <Field label="Valor (R$)"><input className="input text-2xl" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
       <Field label="Motivo" className="mt-3"><input className="input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
       <div className="mt-3"><ErrorBox error={err} /></div>
@@ -115,15 +119,17 @@ function MovementModal({ kind, cashId, onClose, onDone }) {
 }
 
 function CloseModal({ open, cashId, onClose, onDone }) {
+  const [byNote, setByNote] = useState(() => prefs.get('rusten.cash.count', 'cedulas') === 'cedulas');
+  const [cashTyped, setCashTyped] = useState('');
   const [notes, setNotes] = useState({});
   const [counted, setCounted] = useState({ pix: '', debito: '', credito: '', vale: '' });
   const [just, setJust] = useState('');
   const [err, setErr] = useState(null);
-  const cashTotal = DENOMS.reduce((sum, d) => sum + d * (Number(notes[d]) || 0), 0);
+  const cashTotal = byNote ? DENOMS.reduce((sum, d) => sum + d * (Number(notes[d]) || 0), 0) : (parseCents(cashTyped || '0') ?? 0);
   const go = async () => {
     setErr(null);
     try {
-      const body = { counted: { dinheiro: cashTotal }, notes: Object.fromEntries(Object.entries(notes).filter(([, v]) => Number(v) > 0).map(([k, v]) => [k, Number(v)])), justification: just || undefined };
+      const body = { counted: { dinheiro: cashTotal }, notes: !byNote ? {} : Object.fromEntries(Object.entries(notes).filter(([, v]) => Number(v) > 0).map(([k, v]) => [k, Number(v)])), justification: just || undefined };
       for (const [k, v] of Object.entries(counted)) { const c = parseCents(v || '0'); if (c == null) throw new Error(`Valor inválido em ${k}`); body.counted[k] = c; }
       onDone(await api(`/api/cash/${cashId}/close`, { method: 'POST', body }));
     } catch (e) { setErr(e); }
@@ -134,16 +140,27 @@ function CloseModal({ open, cashId, onClose, onDone }) {
       <div className="grid gap-5 md:grid-cols-2">
         <div>
           <h3 className="font-semibold">Dinheiro na gaveta</h3>
-          <div className="mt-2 grid grid-cols-2 gap-2">
-            {DENOMS.map((d) => (
-              <label key={d} className="flex items-center gap-2 text-sm"><span className="w-20 text-right">{money(d)}</span>
-                <input className="input py-1" type="number" min={0} value={notes[d] || ''} onChange={(e) => setNotes({ ...notes, [d]: e.target.value })} aria-label={`Quantidade de ${money(d)}`} /></label>
+          <div className="mt-2 flex rounded-lg border border-line bg-surface p-0.5" role="radiogroup" aria-label="Como contar o dinheiro" data-no-dirty>
+            {[[true, 'Contar por cédula'], [false, 'Informar o total']].map(([v, l]) => (
+              <button key={l} type="button" role="radio" aria-checked={byNote === v} onClick={() => { setByNote(v); prefs.set('rusten.cash.count', v ? 'cedulas' : 'total'); }}
+                className={`min-h-[40px] flex-1 rounded-md px-2 text-sm font-semibold ${byNote === v ? 'bg-copper text-white dark:text-black' : 'text-muted'}`}>{l}</button>
             ))}
           </div>
+          {byNote ? (
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {DENOMS.map((d) => (
+                <label key={d} className="flex items-center gap-2 text-sm"><span className="w-16 shrink-0 text-right">{money(d)}</span>
+                  <input className="input min-w-0 py-1" type="number" inputMode="numeric" min={0} placeholder="0" value={notes[d] || ''} onChange={(e) => setNotes({ ...notes, [d]: e.target.value })} aria-label={`Quantidade de ${money(d)}`} /></label>
+              ))}
+            </div>
+          ) : (
+            <Field label="Total em dinheiro contado (R$)" className="mt-2"><input className="input text-2xl" inputMode="decimal" value={cashTyped} onChange={(e) => setCashTyped(e.target.value)} placeholder="0,00" data-cash-total /></Field>
+          )}
           <div className="mt-2 font-display text-2xl">Contado: {money(cashTotal)}</div>
         </div>
         <div>
           <h3 className="font-semibold">Demais formas (comprovantes)</h3>
+          <p className="text-xs text-muted">Some os comprovantes da maquininha e do Pix de cada forma.</p>
           {METHODS.filter(([k]) => k !== 'dinheiro').map(([k, l]) => (
             <Field key={k} label={l} className="mt-2"><input className="input" inputMode="decimal" placeholder={centsToInput(0)} value={counted[k]} onChange={(e) => setCounted({ ...counted, [k]: e.target.value })} /></Field>
           ))}

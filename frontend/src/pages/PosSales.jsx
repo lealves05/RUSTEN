@@ -238,7 +238,7 @@ function Detail({ id, onClose, onChanged }) {
           {canceling && (
             <div className="card space-y-2 border-rust p-3">
               <Field label="Motivo do cancelamento" hint="Os valores saem dos relatórios; a importação continua no histórico."><input className="input" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={200} data-pos-reason /></Field>
-              <div className="flex gap-2"><button className="btn-ghost" onClick={() => setCanceling(false)}>Voltar</button><button className="btn-primary" disabled={reason.trim().length < 5} onClick={cancel} data-pos-cancel-confirm>Confirmar cancelamento</button></div>
+              <div className="flex gap-2"><button className="btn-ghost" onClick={() => setCanceling(false)}>Voltar</button><button className="btn-primary" aria-disabled={(reason.trim().length < 5) || undefined} data-why={'Escreva o motivo (mínimo de 5 letras)'} onClick={cancel} data-pos-cancel-confirm>Confirmar cancelamento</button></div>
             </div>
           )}
         </div>

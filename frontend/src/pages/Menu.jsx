@@ -1,7 +1,7 @@
 // Cardápio: produtos, preços, códigos de leitura, opções e categorias.
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { BookOpen, Plus, Trash2 } from 'lucide-react';
+import { BookOpen, ImagePlus, Plus, Trash2 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { money, parseCents, centsToInput, dateTime } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
@@ -49,7 +49,7 @@ export default function Menu() {
                   <td className="text-right">{money(p.price_cents)}{p.kind === 'weight' ? `/${p.unit}` : ''}</td>
                   {p.cost_cents !== undefined && <td className="text-right">{money(p.cost_cents)}</td>}
                   <td className="font-mono text-xs">{p.codes.join(', ') || '—'}</td>
-                  <td className="space-x-1">{p.active ? <Badge tone="ok">Ativo</Badge> : <Badge tone="muted">Inativo</Badge>}{p.demo && <Badge tone="warn">Demo</Badge>}{p.favorite && <Badge tone="info">Favorito</Badge>}</td>
+                  <td className="space-x-1">{p.active ? <Badge tone="ok">Ativo</Badge> : <Badge tone="muted">Inativo</Badge>}{p.demo && <Badge tone="warn">Demo</Badge>}{p.favorite && <Badge tone="info">Favorito</Badge>}{p.photo_v && <Badge tone="muted" icon={ImagePlus}>Foto</Badge>}</td>
                 </tr>
               ))}
             </tbody>
@@ -68,12 +68,14 @@ function ProductForm({ product, cats, sectors, onClose, onSaved }) {
   const [f, setF] = useState(() => ({
     name: product.name || '', description: product.description || '', sku: product.sku || '', kind: product.kind || 'resale', unit: product.unit || 'un',
     price: centsToInput(product.price_cents), cost: centsToInput(product.cost_cents ?? 0), category_id: product.category_id || '', sector_id: product.sector_id || '',
-    favorite: !!product.favorite, active: product.active ?? true, allergens: product.allergens || '', codes: (product.codes || []).join('\n'),
+    favorite: !!product.favorite, active: product.active ?? true, channels: product.channels || ['pdv', 'delivery', 'cardapio_digital'], allergens: product.allergens || '', codes: (product.codes || []).join('\n'),
     groups: (product.groups || []).map((g) => ({ name: g.name, min: g.min, max: g.max, options: g.options.map((o) => ({ name: o.name, price: centsToInput(o.price_cents) })) })),
   }));
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
   const [history, setHistory] = useState(null);
+  const [photo, setPhoto] = useState({ url: null, changed: false }); // foto do cardápio digital
+  useEffect(() => { if (!isNew && product.photo_v) api(`/api/menu/products/${product.id}/photo`).then((r) => setPhoto({ url: r.data_url, changed: false })).catch(() => {}); }, [isNew, product.id, product.photo_v]);
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
   const setGroup = (i, patch) => setF((x) => ({ ...x, groups: x.groups.map((g, j) => (j === i ? { ...g, ...patch } : g)) }));
   useEffect(() => { if (!isNew) api(`/api/menu/products/${product.id}/prices`).then(setHistory).catch(() => {}); }, [isNew, product.id]);
@@ -87,8 +89,15 @@ function ProductForm({ product, cats, sectors, onClose, onSaved }) {
         options: g.options.filter((o) => o.name.trim()).map((o) => { const c = parseCents(o.price || '0'); if (c == null) throw new Error(`Preço inválido em ${o.name}`); return { name: o.name.trim(), price_cents: c }; }) }));
       const body = { name: f.name, description: f.description || null, sku: f.sku || null, kind: f.kind, unit: f.kind === 'weight' && f.unit === 'un' ? 'kg' : f.unit,
         price_cents: price, cost_cents: cost, category_id: f.category_id ? Number(f.category_id) : null, sector_id: f.sector_id ? Number(f.sector_id) : null,
-        favorite: f.favorite, active: f.active, allergens: f.allergens || null, codes: f.codes.split(/[\n,;]+/).map((c) => c.trim()).filter(Boolean), groups };
-      await api(isNew ? '/api/menu/products' : `/api/menu/products/${product.id}`, { method: isNew ? 'POST' : 'PUT', body });
+        favorite: f.favorite, active: f.active, channels: f.channels.length ? f.channels : ['pdv'], allergens: f.allergens || null, codes: f.codes.split(/[\n,;]+/).map((c) => c.trim()).filter(Boolean), groups };
+      const r = await api(isNew ? '/api/menu/products' : `/api/menu/products/${product.id}`, { method: isNew ? 'POST' : 'PUT', body });
+      const id = isNew ? r.id : product.id;
+      if (photo.changed) {
+        try {
+          if (photo.url) await api(`/api/menu/products/${id}/photo`, { method: 'PUT', body: { data_url: photo.url } });
+          else await api(`/api/menu/products/${id}/photo`, { method: 'DELETE' });
+        } catch (e2) { toast(`Produto salvo, mas a foto não: ${e2.message}`, 'warn'); onSaved(); return; }
+      }
       toast(isNew ? 'Produto criado' : 'Produto salvo'); onSaved();
     } catch (e) { setErr(e); } finally { setBusy(false); }
   };
@@ -103,12 +112,15 @@ function ProductForm({ product, cats, sectors, onClose, onSaved }) {
         <Field label="Custo (R$)" hint="Visível só para quem vê CMV/gerencia o cardápio"><input className="input" inputMode="decimal" value={f.cost} onChange={(e) => set('cost', e.target.value)} /></Field>
         <Field label="Categoria"><select className="input" value={f.category_id} onChange={(e) => set('category_id', e.target.value)}><option value="">—</option>{cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>
         <Field label="Setor de produção" hint="Sem setor = não vai para cozinha/bar"><select className="input" value={f.sector_id} onChange={(e) => set('sector_id', e.target.value)}><option value="">Não produz</option>{sectors.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>
-        <Field label="SKU"><input className="input" value={f.sku} onChange={(e) => set('sku', e.target.value)} /></Field>
+        <Field label="SKU (opcional)" hint="Seu código interno do produto."><input className="input" value={f.sku} onChange={(e) => set('sku', e.target.value)} /></Field>
         <Field label="Códigos de leitura" hint="Um por linha (EAN, etiqueta própria…). Zeros à esquerda são preservados."><textarea className="input font-mono" rows={3} value={f.codes} onChange={(e) => set('codes', e.target.value)} /></Field>
-        <Field label="Descrição" className="sm:col-span-2"><input className="input" value={f.description} onChange={(e) => set('description', e.target.value)} /></Field>
+        <Field label="Descrição" hint="Aparece para o cliente no cardápio digital." className="sm:col-span-2"><input className="input" value={f.description} onChange={(e) => set('description', e.target.value)} /></Field>
+        <div className="sm:col-span-2"><PhotoField photo={photo} onChange={(url) => setPhoto({ url, changed: true })} onError={setErr} /></div>
         <Field label="Ingredientes/alergênicos (informados pelo estabelecimento)" className="sm:col-span-2"><input className="input" value={f.allergens} onChange={(e) => set('allergens', e.target.value)} /></Field>
         <Toggle checked={f.favorite} onChange={(v) => set('favorite', v)} label="Favorito no PDV" />
         <Toggle checked={f.active} onChange={(v) => set('active', v)} label="Disponível para venda" />
+        <Toggle checked={f.channels.includes('cardapio_digital')} onChange={(v) => set('channels', v ? [...new Set([...f.channels, 'delivery', 'cardapio_digital'])] : f.channels.filter((c) => c !== 'cardapio_digital' && c !== 'delivery'))}
+          label="Aparece no cardápio digital" hint="Cliente pode pedir pelo celular (entrega ou retirada)." />
       </div>
       <div className="mt-5">
         <div className="flex items-center justify-between"><h3 className="font-display text-2xl">Opções e adicionais</h3>
@@ -142,6 +154,33 @@ function ProductForm({ product, cats, sectors, onClose, onSaved }) {
   );
 }
 
+// Foto opcional (cardápio digital): reduzida no navegador para até 800 px e ~300 KB antes do envio
+async function shrink(file) {
+  if (!/^image\/(jpeg|png|webp)$/.test(file.type)) throw new Error('Use uma imagem JPG, PNG ou WebP');
+  const src = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error('Não foi possível ler a imagem')); r.readAsDataURL(file); });
+  const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Imagem inválida')); i.src = src; });
+  for (const [max, q] of [[800, 0.82], [640, 0.72], [480, 0.6]]) {
+    const k = Math.min(1, max / Math.max(img.width, img.height));
+    const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    const out = c.toDataURL('image/jpeg', q);
+    if (out.length * 0.75 < 290 * 1024) return out;
+  }
+  throw new Error('Imagem grande demais mesmo reduzida. Tente outra foto.');
+}
+
+function PhotoField({ photo, onChange, onError }) {
+  const pick = async (e) => { const file = e.target.files?.[0]; e.target.value = ''; if (!file) return; try { onChange(await shrink(file)); } catch (x) { onError(x); } };
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-line p-3" data-photo-field>
+      {photo.url ? <img src={photo.url} alt="Foto do produto" className="h-20 w-20 rounded-lg object-cover" /> : <div className="flex h-20 w-20 items-center justify-center rounded-lg bg-raised text-muted"><ImagePlus /></div>}
+      <div className="flex-1 text-sm"><div className="font-semibold">Foto (opcional)</div><div className="text-xs text-muted">Aparece no cardápio digital. Foto deitada, com boa luz, fica melhor.</div></div>
+      <label className="btn-ghost cursor-pointer"><ImagePlus size={16} /> {photo.url ? 'Trocar' : 'Escolher foto'}<input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={pick} data-photo-input /></label>
+      {photo.url && <button type="button" className="btn-ghost text-rust" onClick={() => onChange(null)}><Trash2 size={16} /> Remover</button>}
+    </div>
+  );
+}
+
 function CategoriesModal({ open, cats, onClose, onChanged }) {
   const [name, setName] = useState('');
   const [err, setErr] = useState(null);
@@ -149,7 +188,7 @@ function CategoriesModal({ open, cats, onClose, onChanged }) {
   const toggle = async (c) => { try { await api(`/api/menu/categories/${c.id}`, { method: 'PUT', body: { active: !c.active } }); onChanged(); } catch (e) { setErr(e); } };
   return (
     <Modal open={open} onClose={onClose} title="Categorias">
-      <div className="flex gap-2"><input className="input" placeholder="Nova categoria" value={name} onChange={(e) => setName(e.target.value)} /><button className="btn-primary" disabled={!name.trim()} onClick={add}>Adicionar</button></div>
+      <div className="flex gap-2"><input className="input" placeholder="Nova categoria" value={name} onChange={(e) => setName(e.target.value)} /><button className="btn-primary" aria-disabled={(!name.trim()) || undefined} data-why={'Digite o nome da categoria'} onClick={add}>Adicionar</button></div>
       <ul className="mt-3 divide-y divide-line">{cats.map((c) => <li key={c.id} className="flex items-center justify-between py-2"><span>{c.name} {c.demo && <Badge tone="warn">Demo</Badge>}</span><button className="text-sm underline" onClick={() => toggle(c)}>{c.active ? 'desativar' : 'ativar'}</button></li>)}</ul>
       <div className="mt-3"><ErrorBox error={err} /></div>
     </Modal>

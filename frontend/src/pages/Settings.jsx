@@ -6,7 +6,8 @@ import { dateTime, bp } from '../lib/format.js';
 import { useSession, applyTheme } from '../lib/session.jsx';
 import Subscription from './Subscription.jsx';
 import { InfinitePaySettings } from '../components/InfinitePay.jsx';
-import { Badge, ErrorBox, Field, Loading, Modal, PageHeader, Toggle, useLoad, useToast } from '../components/ui.jsx';
+import NoteIntegrations from '../components/NoteIntegrations.jsx';
+import { Badge, ErrorBox, Field, Loading, Modal, PageHeader, Toggle, useLoad, useToast, useAsk } from '../components/ui.jsx';
 
 export default function Settings() {
   const s = useSession();
@@ -35,7 +36,7 @@ export default function Settings() {
             <Route path="usuarios" element={<Users />} />
             <Route path="perfis" element={<Roles />} />
             <Route path="unidades" element={<Units />} />
-            <Route path="integracoes" element={<InfinitePaySettings />} />
+            <Route path="integracoes" element={<div className="space-y-6"><InfinitePaySettings /><NoteIntegrations /></div>} />
             <Route path="assinatura" element={<Subscription />} />
             <Route path="auditoria" element={<Audit />} />
           </Routes>
@@ -46,6 +47,7 @@ export default function Settings() {
 }
 
 function Company() {
+  const ask = useAsk();
   const s = useSession();
   const toast = useToast();
   const { data, loading, error, reload } = useLoad(() => api('/api/admin/settings'));
@@ -60,7 +62,7 @@ function Company() {
     catch (e) { setErr(e); }
   };
   const removeDemo = async () => {
-    if (!confirm('Remover o cardápio de demonstração? Produtos já vendidos serão apenas desativados.')) return;
+    if (!await ask.confirm({ title: 'Remover demonstração', message: 'Remover o cardápio de demonstração? Produtos já vendidos serão apenas desativados.', confirmLabel: 'Remover', danger: true })) return;
     try { const r = await api('/api/menu/demo', { method: 'DELETE' }); toast(`${r.removed} removidos, ${r.deactivated} desativados`); } catch (e) { setErr(e); }
   };
   const ap = (k, v) => setF({ ...f, appearance: { ...f.appearance, [k]: v } });
@@ -267,6 +269,7 @@ function Roles() {
 }
 
 function Units() {
+  const ask = useAsk();
   const s = useSession();
   const toast = useToast();
   const units = useLoad(() => api('/api/admin/units'));
@@ -274,8 +277,8 @@ function Units() {
   const [err, setErr] = useState(null);
   const manage = s.can('configuracoes.gerenciar');
   if (units.loading || terms.loading) return <Loading />;
-  const addUnit = async () => { const name = prompt('Nome da unidade:'); if (!name) return; try { await api('/api/admin/units', { method: 'POST', body: { name } }); units.reload(); } catch (e) { setErr(e); } };
-  const addTerm = async (unit) => { const name = prompt(`Nome do terminal em ${unit.name}:`); if (!name) return; try { await api('/api/admin/terminals', { method: 'POST', body: { name, unit_id: unit.id } }); terms.reload(); } catch (e) { setErr(e); } };
+  const addUnit = async () => { const name = await ask.value({ title: 'Nova unidade', label: 'Nome da unidade', placeholder: 'ex.: Filial Centro', confirmLabel: 'Criar unidade' }); if (!name) return; try { await api('/api/admin/units', { method: 'POST', body: { name } }); units.reload(); } catch (e) { setErr(e); } };
+  const addTerm = async (unit) => { const name = await ask.value({ title: `Novo terminal em ${unit.name}`, label: 'Nome do terminal', message: 'Terminal é cada aparelho que lança ou recebe (ex.: Caixa 2, Tablet do salão).', placeholder: 'ex.: Caixa 2', confirmLabel: 'Criar terminal' }); if (!name) return; try { await api('/api/admin/terminals', { method: 'POST', body: { name, unit_id: unit.id } }); terms.reload(); } catch (e) { setErr(e); } };
   const setCutoff = async (u, v) => { try { await api(`/api/admin/units/${u.id}`, { method: 'PUT', body: { day_cutoff: Number(v) } }); toast('Salvo'); units.reload(); } catch (e) { setErr(e); } };
   return (
     <div className="space-y-4">

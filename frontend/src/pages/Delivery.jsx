@@ -4,7 +4,7 @@ import { Bike, Copy, ExternalLink, Phone, Plus, Settings2, Store, Trash2 } from 
 import { api, newKey } from '../lib/api.js';
 import { money, time, parseCents, centsToInput } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
-import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHeader, Toggle, useLoad, useToast } from '../components/ui.jsx';
+import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHeader, Toggle, useLoad, useToast, useAsk } from '../components/ui.jsx';
 
 export const DSTATUS = { recebido: 'Recebido', confirmado: 'Confirmado', em_preparo: 'Em preparo', pronto: 'Pronto', saiu: 'Saiu para entrega', entregue: 'Entregue', cancelado: 'Cancelado' };
 const COLS = [['recebido', 'Novos'], ['confirmado', 'Em produção'], ['pronto', 'Prontos'], ['saiu', 'Em rota']];
@@ -13,6 +13,7 @@ const PAY = { dinheiro: 'Dinheiro', pix: 'Pix', cartao: 'Cartão' };
 const KSTAT = { novo: 'na fila', aceito: 'aceito', preparando: 'preparando', pronto: 'pronto', entregue: 'entregue', cancelado: 'cancelado', nao_produz: '' };
 
 export default function Delivery() {
+  const ask = useAsk();
   const s = useSession();
   const toast = useToast();
   const [filter, setFilter] = useState('abertos');
@@ -27,7 +28,7 @@ export default function Delivery() {
     try { await api(`/api/delivery/orders/${o.id}/status`, { method: 'POST', body: { to, ...extra } }); orders.reload(); }
     catch (e) { if (e.code === 'balance_pending') setPay(o); else toast(e.message, 'bad'); }
   };
-  const cancel = async (o) => { const reason = prompt(`Motivo do cancelamento do pedido #${o.number}:`); if (reason) move(o, 'cancelado', { reason }); };
+  const cancel = async (o) => { const reason = await ask.reason({ title: `Cancelar pedido #${o.number}`, danger: true, confirmLabel: 'Cancelar pedido', reasons: ['Cliente desistiu', 'Fora da área de entrega', 'Produto em falta', 'Endereço não encontrado'] }); if (reason) move(o, 'cancelado', { reason }); };
   const setCourier = async (o, id) => { try { await api(`/api/delivery/orders/${o.id}/courier`, { method: 'POST', body: { courier_id: id ? Number(id) : null } }); orders.reload(); } catch (e) { toast(e.message, 'bad'); } };
   const menuUrl = cfg.data?.slug ? `${location.origin}/c/${cfg.data.slug}` : null;
   const grouped = useMemo(() => {
@@ -38,7 +39,7 @@ export default function Delivery() {
 
   return (
     <div>
-      <PageHeader title="Delivery" subtitle="Pedidos do cardápio digital, WhatsApp e telefone. Preço e disponibilidade são sempre conferidos no servidor."
+      <PageHeader title="Delivery" subtitle="Pedidos do cardápio digital, WhatsApp e telefone. Confirme os novos para que entrem na fila da cozinha."
         actions={<>
           <button className="btn-primary" onClick={() => setModal('new')}><Phone size={16} /> Pedido por telefone</button>
           {s.can('configuracoes.gerenciar') && <button className="btn-ghost" onClick={() => setModal('cfg')}><Settings2 size={16} /> Cardápio digital</button>}
@@ -48,15 +49,19 @@ export default function Delivery() {
           {cfg.data.enabled ? <>
             <Badge tone={cfg.data.accepting ? 'ok' : 'warn'}>{cfg.data.accepting ? 'Recebendo pedidos' : 'Pausado'}</Badge>
             <span className="font-mono text-xs">{menuUrl}</span>
-            <button className="text-xs underline" onClick={() => { navigator.clipboard?.writeText(menuUrl); toast('Link copiado'); }}><Copy size={12} className="inline" /> copiar</button>
-            <a className="text-xs underline" href={menuUrl} target="_blank" rel="noreferrer"><ExternalLink size={12} className="inline" /> abrir</a>
+            <button className="min-h-[40px] text-xs underline" onClick={() => { navigator.clipboard?.writeText(menuUrl); toast('Link copiado'); }}><Copy size={12} className="inline" /> copiar</button>
+            <a className="inline-flex min-h-[40px] items-center text-xs underline" href={menuUrl} target="_blank" rel="noreferrer"><ExternalLink size={12} className="inline" /> abrir</a>
             {s.can('configuracoes.gerenciar') && <button className="btn-ghost ml-auto py-1" onClick={async () => { await api('/api/delivery/settings', { method: 'PUT', body: { ...strip(cfg.data), accepting: !cfg.data.accepting } }).catch((e) => toast(e.message, 'bad')); cfg.reload(); }}>
               {cfg.data.accepting ? 'Pausar pedidos' : 'Voltar a receber'}</button>}
-          </> : <span>Cardápio digital desligado. Configure em <b>Cardápio digital</b> para receber pedidos online.</span>}
+          </> : <>
+            <span className="flex-1">Cardápio digital desligado: os clientes ainda não conseguem pedir pelo celular.</span>
+            {s.can('configuracoes.gerenciar') ? <button className="btn-primary" onClick={() => setModal('cfg')} data-enable-menu><Settings2 size={16} /> Ligar cardápio digital</button>
+              : <span className="text-muted">Peça ao gerente para ligar.</span>}
+          </>}
         </div>
       )}
       <div className="mb-3 flex gap-1">{[['abertos', 'Em andamento'], ['hoje', 'Últimas 24h']].map(([k, l]) => (
-        <button key={k} onClick={() => setFilter(k)} aria-pressed={filter === k} className={`rounded-full border px-3 py-1.5 text-sm font-semibold ${filter === k ? 'border-copper bg-copper text-white dark:text-black' : 'border-line bg-surface'}`}>{l}</button>))}</div>
+        <button key={k} onClick={() => setFilter(k)} aria-pressed={filter === k} className={`min-h-[44px] rounded-full border px-4 text-sm font-semibold ${filter === k ? 'border-copper bg-copper text-white dark:text-black' : 'border-line bg-surface'}`}>{l}</button>))}</div>
       {orders.loading && !orders.data ? <Loading /> : orders.error ? <ErrorBox error={orders.error} onRetry={orders.reload} /> : !orders.data.length ? (
         <Empty icon={Bike} title="Nenhum pedido">Os pedidos do cardápio digital chegam aqui e tocam na cozinha assim que você confirmar.</Empty>
       ) : filter === 'hoje' ? (
@@ -133,7 +138,7 @@ function PayModal({ order, onClose, onDone }) {
     } catch (e) { setErr(e); }
   };
   return (
-    <Modal open onClose={onClose} title={`Receber pedido #${order.number}`} footer={<><button className="btn-ghost" onClick={onClose}>Voltar</button><button className="btn-primary" disabled={!s.can('pdv.receber')} onClick={go}>Receber {money(due)}</button></>}>
+    <Modal open onClose={onClose} title={`Receber pedido #${order.number}`} footer={<><button className="btn-ghost" onClick={onClose}>Voltar</button><button className="btn-primary" aria-disabled={(!s.can('pdv.receber')) || undefined} data-why={'Seu perfil não pode receber pagamentos'} onClick={go}>Receber {money(due)}</button></>}>
       <div className="grid grid-cols-2 gap-2">{[['pix', 'Pix'], ['dinheiro', 'Dinheiro'], ['debito', 'Débito'], ['credito', 'Crédito']].map(([k, l]) => (
         <button key={k} aria-pressed={method === k} onClick={() => setMethod(k)} className={`rounded-lg border p-3 font-semibold ${method === k ? 'border-copper bg-copper/15' : 'border-line'}`}>{l}</button>))}</div>
       <p className="mt-2 text-xs text-muted">Pagamento na entrega/retirada, informado pelo operador. O caixa do terminal precisa estar aberto.</p>
@@ -171,7 +176,7 @@ function NewOrderModal({ open, onClose, onSaved }) {
   };
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   return (
-    <Modal open wide onClose={onClose} title="Pedido por telefone" footer={<><span className="mr-auto font-display text-xl">{money(total)} + entrega</span><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" disabled={!cart.length} onClick={save}>Registrar pedido</button></>}>
+    <Modal open wide onClose={onClose} title="Pedido por telefone" footer={<><span className="mr-auto font-display text-xl">{money(total)} + entrega</span><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" aria-disabled={(!cart.length) || undefined} data-why={'Adicione ao menos um produto ao pedido'} onClick={save}>Registrar pedido</button></>}>
       <div className="grid grid-cols-2 gap-2">{[['entrega', 'Entrega'], ['retirada', 'Retirada']].map(([k, l]) => (
         <button key={k} aria-pressed={f.mode === k} onClick={() => setF({ ...f, mode: k })} className={`rounded-lg border p-3 font-semibold ${f.mode === k ? 'border-copper bg-copper/15' : 'border-line'}`}>{l}</button>))}</div>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -186,7 +191,7 @@ function NewOrderModal({ open, onClose, onSaved }) {
       </div>
       <div className="mt-3 flex gap-2">
         <select className="input" value={pick} onChange={(e) => setPick(e.target.value)} aria-label="Produto"><option value="">Adicionar produto…</option>{products.map((p) => <option key={p.id} value={p.id}>{p.name} — {money(p.price_cents)}</option>)}</select>
-        <button className="btn-ghost" onClick={add} disabled={!pick}><Plus size={16} /></button>
+        <button className="btn-ghost" onClick={add} aria-disabled={(!pick) || undefined} data-why={'Escolha o produto na lista'} aria-label="Adicionar produto"><Plus size={16} /></button>
       </div>
       <ul className="mt-2 divide-y divide-line">{cart.map((c, i) => (
         <li key={i} className="flex items-center gap-2 py-2 text-sm">

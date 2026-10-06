@@ -1,11 +1,12 @@
 // Estoque: insumos e saldos, fichas técnicas versionadas, compras com recebimento parcial, inventário e produção.
 import { useEffect, useRef, useState } from 'react';
-import { Barcode, Camera, CheckCircle2, ClipboardCheck, Download, FileCode2, Keyboard, KeyRound, Loader2, Package, Plus, Printer, ScanLine, ShieldCheck, ShoppingCart, Trash2, Wrench, X } from 'lucide-react';
+import { Barcode, Camera, CheckCircle2, ClipboardCheck, Download, FileCode2, Keyboard, Loader2, Package, Plus, Printer, ScanLine, ShieldCheck, ShoppingCart, Trash2, Wrench, X } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { code128Svg, startScanner } from '../lib/barcode.js';
 import { api, download } from '../lib/api.js';
 import { money, dateTime, parseCents, centsToInput } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
-import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHeader, Toggle, useLoad, useToast } from '../components/ui.jsx';
+import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHeader, Toggle, useLoad, useToast, useAsk, GuardedButton } from '../components/ui.jsx';
 
 const UNITS = ['un', 'kg', 'g', 'L', 'ml'];
 const num = (v) => Number(String(v).replace(',', '.'));
@@ -138,7 +139,7 @@ function MovementModal({ data, onClose, onSaved }) {
     } catch (e) { setErr(e); }
   };
   return (
-    <Modal open onClose={onClose} title={`${data.kind === 'entrada' ? 'Entrada' : 'Perda'} — ${data.item.name}`} footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" disabled={!num(qty) || reason.trim().length < 3} onClick={save}>Registrar</button></>}>
+    <Modal open onClose={onClose} title={`${data.kind === 'entrada' ? 'Entrada' : 'Perda'} — ${data.item.name}`} footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" aria-disabled={(!num(qty) || reason.trim().length < 3) || undefined} data-why={!num(qty) ? 'Informe a quantidade' : 'Escreva o motivo'} onClick={save}>Registrar</button></>}>
       <div className="grid grid-cols-2 gap-3">
         <Field label={`Quantidade (${data.item.unit})`}><input className="input text-xl" inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} /></Field>
         {data.kind === 'entrada' && <Field label={`Custo por ${data.item.unit} (R$)`}><input className="input" inputMode="decimal" value={cost} onChange={(e) => setCost(e.target.value)} /></Field>}
@@ -150,12 +151,13 @@ function MovementModal({ data, onClose, onSaved }) {
 }
 
 function HistoryModal({ item, onClose }) {
+  const ask = useAsk();
   const s = useSession();
   const toast = useToast();
   const h = useLoad(() => (item ? api(`/api/stock/items/${item.id}/movements`) : Promise.resolve(null)), [item?.id]);
   if (!item) return null;
   const reverse = async (m) => {
-    const reason = prompt('Motivo da reversão:'); if (!reason) return;
+    const reason = await ask.reason({ title: 'Reverter movimento', danger: true, confirmLabel: 'Reverter', reasons: ['Lançado em duplicidade', 'Quantidade errada', 'Item errado'] }); if (!reason) return;
     try { await api(`/api/stock/movements/${m.id}/reverse`, { method: 'POST', body: { reason } }); h.reload(); } catch (e) { toast(e.message, 'bad'); }
   };
   return (
@@ -273,7 +275,7 @@ function ProduceModal({ product, onClose }) {
     try { const r = await api('/api/stock/produce', { method: 'POST', body: { product_id: product.id, qty: num(qty) } }); toast(`Produção registrada (custo ${money(r.cost_cents)})`); onClose(); } catch (e) { setErr(e); }
   };
   return (
-    <Modal open onClose={onClose} title={`Produzir ${product.name}`} footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" disabled={!num(qty)} onClick={go}>Registrar produção</button></>}>
+    <Modal open onClose={onClose} title={`Produzir ${product.name}`} footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" aria-disabled={(!num(qty)) || undefined} data-why={'Informe a quantidade a produzir'} onClick={go}>Registrar produção</button></>}>
       <p className="text-sm text-muted">Consome os insumos da ficha de produção e dá entrada no estoque do produto acabado.</p>
       <Field label="Quantidade produzida" className="mt-3"><input className="input text-xl" inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} /></Field>
       <div className="mt-3"><ErrorBox error={err} /></div>
@@ -282,16 +284,17 @@ function ProduceModal({ product, onClose }) {
 }
 
 function Purchases({ stock, onChanged }) {
+  const ask = useAsk();
   const s = useSession();
   const toast = useToast();
   const p = useLoad(() => api('/api/stock/purchases'), []);
   const [creating, setCreating] = useState(false);
   const [receiving, setReceiving] = useState(null);
   if (p.loading && !p.data) return <Loading />;
-  const cancel = async (x) => { const reason = prompt('Motivo do cancelamento:'); if (!reason) return; try { await api(`/api/stock/purchases/${x.id}/cancel`, { method: 'POST', body: { reason } }); p.reload(); } catch (e) { toast(e.message, 'bad'); } };
+  const cancel = async (x) => { const reason = await ask.reason({ title: `Cancelar compra #${x.id}`, danger: true, confirmLabel: 'Cancelar compra', reasons: ['Fornecedor não entregou', 'Pedido em duplicidade', 'Pedido errado'] }); if (!reason) return; try { await api(`/api/stock/purchases/${x.id}/cancel`, { method: 'POST', body: { reason } }); p.reload(); } catch (e) { toast(e.message, 'bad'); } };
   return (
     <div className="space-y-3">
-      {s.can('compras.gerenciar') && <button className="btn-primary" onClick={() => setCreating(true)} disabled={!stock.length}><ShoppingCart size={16} /> Nova compra</button>}
+      {s.can('compras.gerenciar') && <GuardedButton missing={!stock.length && 'Cadastre ao menos um insumo em Estoque › Insumos antes de registrar uma compra (ou use Lançar nota, que cria os insumos).'} onClick={() => setCreating(true)} data-new-purchase><ShoppingCart size={16} /> Nova compra</GuardedButton>}
       {!p.data?.length ? <Empty icon={ShoppingCart} title="Nenhuma compra">Registre as compras dos fornecedores; o recebimento dá entrada no estoque e atualiza o custo médio.</Empty> : (
         <div className="card overflow-x-auto"><table className="table-clean">
           <thead><tr><th>#</th><th>Fornecedor</th><th>Documento</th><th>Vencimento</th><th>Situação</th><th className="text-right">Total</th><th /></tr></thead>
@@ -449,7 +452,7 @@ function FromMenuModal({ open, onClose, onDone }) {
   };
   return (
     <Modal open wide onClose={onClose} title="Controlar produtos do cardápio no estoque"
-      footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" disabled={!ids.length || busy} onClick={save}>Controlar {ids.length || ''} produto(s)</button></>}>
+      footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" disabled={busy} aria-disabled={(!ids.length) || undefined} data-why={'Marque ao menos um produto'} onClick={save}>Controlar {ids.length || ''} produto(s)</button></>}>
       <p className="mb-3 text-sm text-muted">Use para itens vendidos do jeito que chegam (bebidas em lata/garrafa, água, sobremesas prontas). Cada um vira um item de estoque em unidades, com baixa automática na venda. Pratos montados na cozinha ficam melhor com ficha técnica.</p>
       {r.loading ? <Loading /> : !list.length ? <p className="text-sm text-muted">Todos os produtos já têm controle de estoque.</p> : (
         <>
@@ -511,7 +514,7 @@ function CorrectionModal({ open, item, stock, onClose, onDone }) {
   const ok = it && counted != null && counted >= 0 && diff !== 0 && f.just.trim().length >= 15;
   return (
     <Modal open wide onClose={onClose} title="Corrigir estoque"
-      footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" disabled={!ok || busy} onClick={send} data-corr-send>{busy ? 'Enviando…' : 'Registrar correção'}</button></>}>
+      footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" disabled={busy} aria-disabled={(!ok) || undefined} data-why={'Preencha item, quantidade e motivo'} onClick={send} data-corr-send>{busy ? 'Enviando…' : 'Registrar correção'}</button></>}>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Item do estoque" className="sm:col-span-2">
           <select className="input" value={f.id} onChange={(e) => setF({ ...f, id: e.target.value })} disabled={!!item?.id} data-corr-item>
@@ -548,6 +551,7 @@ function CorrectionModal({ open, item, stock, onClose, onDone }) {
 const CSTATUS = { pendente: ['warn', 'pendente'], aplicada: ['ok', 'aplicada'], rejeitada: ['bad', 'rejeitada'], expirada: ['muted', 'vencida'] };
 
 function Corrections({ stock, onChanged, goItems }) {
+  const ask = useAsk();
   const s = useSession();
   const toast = useToast();
   const [status, setStatus] = useState('');
@@ -558,8 +562,8 @@ function Corrections({ stock, onChanged, goItems }) {
   const pending = (c.data?.items || []).filter((x) => x.status === 'pendente');
   const decide = async (x, ok) => {
     let note = '';
-    if (!ok) { note = prompt('Motivo da rejeição:') || ''; if (!note) return; }
-    else if (Number(x.requested_by) === Number(s.me?.user?.id ?? s.me?.id)) { note = prompt('Você está aprovando o próprio pedido (não há outro aprovador). Registre uma observação:') || ''; if (!note) return; }
+    if (!ok) { note = await ask.reason({ title: 'Rejeitar correção', danger: true, confirmLabel: 'Rejeitar', reasons: ['Contagem não confere', 'Falta justificativa', 'Recontar antes'] }) || ''; if (!note) return; }
+    else if (Number(x.requested_by) === Number(s.me?.user?.id ?? s.me?.id)) { note = await ask.reason({ title: 'Aprovar o próprio pedido', message: 'Você está aprovando o próprio pedido (não há outro aprovador). Registre uma observação.', label: 'Observação', reasons: ['Conferido pessoalmente'] }) || ''; if (!note) return; }
     try { await api(`/api/stock/corrections/${x.id}/${ok ? 'approve' : 'reject'}`, { method: 'POST', body: note ? { note } : {} }); toast(ok ? 'Correção aprovada e aplicada' : 'Correção rejeitada'); c.reload(); onChanged(); }
     catch (e) { toast(e.message, 'bad'); c.reload(); }
   };
@@ -658,18 +662,18 @@ function BarcodeEntry({ busy, onResult, onError }) {
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex items-center gap-2"><Barcode size={28} className="text-copper" />
           <div><div className="font-display text-2xl leading-none">Ler código de barras</div>
-            <div className="text-xs text-muted">DANFE da NF-e (chave de 44 dígitos) ou pedido de compra impresso pelo RUSTEN. Use o leitor, a câmera ou digite.</div></div></div>
+            <div className="text-xs text-muted">O código de barras da nota fiscal em papel (DANFE) ou do pedido de compra impresso pelo RUSTEN. Use o leitor, a câmera ou digite os números.</div></div></div>
         <form className="flex min-w-[260px] flex-1 gap-2" onSubmit={(e) => { e.preventDefault(); send(code); }}>
           <input ref={input} className="input font-mono" inputMode="numeric" autoComplete="off" placeholder="Aponte o leitor aqui…" value={code}
             onChange={(e) => setCode(e.target.value)} aria-label="Código de barras" disabled={busy || reading} data-barcode-input />
-          <button className="btn-primary" disabled={busy || reading || !code.trim()}>{reading ? <Loader2 className="animate-spin" size={16} /> : <ScanLine size={16} />} Lançar</button>
+          <button className="btn-primary" disabled={busy || reading} aria-disabled={(!code.trim()) || undefined} data-why={'Leia o código com o leitor ou a câmera, ou digite os números'}>{reading ? <Loader2 className="animate-spin" size={16} /> : <ScanLine size={16} />} Lançar</button>
         </form>
         <button type="button" className="btn-ghost" onClick={openCam} disabled={busy || reading}><Camera size={16} /> Câmera</button>
       </div>
       {cam && (
         <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/90 p-4">
           <video ref={video} className="max-h-[70vh] w-full max-w-xl rounded-lg" playsInline muted />
-          <p className="text-sm text-white">Aproxime o código de barras do DANFE ou do pedido. Deite o celular para códigos longos.</p>
+          <p className="text-sm text-white">Aproxime o código de barras da nota fiscal (DANFE) ou do pedido. Deite o celular para códigos longos.</p>
           <button className="btn-ghost text-white" onClick={closeCam}><X size={16} /> Fechar</button>
         </div>
       )}
@@ -721,26 +725,6 @@ function ReceiveByCode({ purchase, onClose, onDone }) {
           <button className="btn-primary" disabled={busy} onClick={save} data-po-confirm>{busy ? <Loader2 className="animate-spin" size={16} /> : <CheckCircle2 size={16} />} Receber e lançar no estoque</button>
         </div>
       </div>
-    </div>
-  );
-}
-
-function FocusTokenCard({ enabled, onSaved }) {
-  const toast = useToast();
-  const [token, setToken] = useState('');
-  const save = async (value) => {
-    try { await api('/api/stock/notes/focus', { method: 'PUT', body: { token: value } }); setToken(''); onSaved(); toast(value ? 'Busca do XML pela chave ativada' : 'Busca do XML pela chave desligada'); }
-    catch (x) { toast(x.message, 'bad'); }
-  };
-  return (
-    <div className="card p-4 text-sm">
-      <h3 className="flex items-center gap-2 font-display text-xl"><Barcode size={18} /> Itens da NF-e pelo código de barras</h3>
-      <p className="mt-1 text-muted">{enabled
-        ? 'Ativa: ao ler o DANFE, o sistema busca o XML da nota na Focus NFe (manifestação do destinatário) e traz os itens.'
-        : 'Opcional. Com uma conta na Focus NFe (CNPJ do restaurante e certificado digital cadastrados), o XML é buscado só com a leitura do DANFE. Sem ela, o sistema pede o arquivo XML e confere a chave.'}</p>
-      <div className="mt-2 flex flex-wrap gap-2"><input className="input max-w-md font-mono" type="password" autoComplete="off" placeholder={enabled ? 'manter o token atual' : 'token da Focus NFe'} value={token} onChange={(e) => setToken(e.target.value)} />
-        <button className="btn-ghost" disabled={!token} onClick={() => save(token)}>Salvar token</button>
-        {enabled && <button className="btn-ghost" onClick={() => save('')}>Desligar</button>}</div>
     </div>
   );
 }
@@ -803,7 +787,6 @@ function NoteImport({ stock, onDone }) {
   const [err, setErr] = useState(null);
   const [doc, setDoc] = useState(null);
   const [preview, setPreview] = useState(null);
-  const [key, setKey] = useState('');
   const toLines = (items) => items.map((i) => ({ description: i.description, alias: i.alias, match: i.match, note_unit: i.unit || '', qty: String(i.qty ?? '').replace('.', ','),
     factor: String(i.factor || 1).replace('.', ','), cost: i.unit_price != null ? centsToInput(Math.round(i.unit_price * 100)) : '',
     target: i.stock_item_id ? String(i.stock_item_id) : 'novo', new_name: i.description.replace(/\s+/g, ' ').slice(0, 60), new_unit: i.suggested_unit || 'un' }));
@@ -855,7 +838,6 @@ function NoteImport({ stock, onDone }) {
   };
   const blankLine = () => ({ description: '', alias: '', match: 'novo', note_unit: '', qty: '1', factor: '1', cost: '', target: stock[0] ? String(stock[0].id) : 'novo', new_name: '', new_unit: 'un', manual: true });
   const manual = () => { setErr(null); setPreview(null); setDoc({ supplier: '', document: '', due_date: '', source: 'manual', warnings: [], total: null, lines: [blankLine()] }); };
-  const saveKey = async () => { try { await api('/api/stock/notes/key', { method: 'PUT', body: { api_key: key } }); setKey(''); status.reload(); toast('Leitura por foto ativada'); } catch (x) { toast(x.message, 'bad'); } };
   const setLine = (i, patch) => setDoc({ ...doc, lines: doc.lines.map((l, j) => (j === i ? { ...l, ...patch } : l)) });
   const total = doc ? doc.lines.reduce((a, l) => a + Math.round(num(l.qty || 0) * (parseCents(l.cost || '0') || 0)), 0) : 0;
   const confirm = async () => {
@@ -886,12 +868,13 @@ function NoteImport({ stock, onDone }) {
       {po && <ReceiveByCode purchase={po} onClose={() => setPo(null)} onDone={(st) => { setPo(null); toast(`Pedido #${po.id} ${st === 'recebida' ? 'recebido' : 'recebido em parte'}: estoque e custo médio atualizados`); onDone(); }} />}
       {!doc && !po && (
         <div className="grid gap-3 md:grid-cols-3">
-          <label className={`card flex cursor-pointer flex-col items-center gap-2 p-6 text-center hover:border-copper ${!status.data?.photo ? 'opacity-60' : ''}`}>
+          <label className={`card flex cursor-pointer flex-col items-center gap-2 p-6 text-center hover:border-copper ${!status.data?.photo ? 'opacity-60' : ''}`}
+            onClick={(e) => { if (status.data && !status.data.photo) { e.preventDefault(); toast(s.can('configuracoes.gerenciar') ? 'A leitura por foto ainda não está configurada: informe a chave em Configurações › Integrações.' : 'A leitura por foto ainda não está configurada. Peça ao gerente; enquanto isso, use o XML ou digite a nota.', 'warn'); } }}>
             <Camera size={36} className="text-copper" />
             <span className="font-display text-2xl">Fotografar nota ou pedido</span>
             <span className="text-sm text-muted">Nota fiscal, cupom, pedido do fornecedor ou lista à mão. O sistema lê os itens, quantidades e preços — você confere antes de lançar.</span>
             <input type="file" accept="image/*,application/pdf" capture="environment" className="sr-only" onChange={photo} disabled={!!busy || !status.data?.photo} data-note-photo />
-            {status.data && !status.data.photo && <span className="text-xs text-warn">Leitura por foto ainda não configurada (veja abaixo).</span>}
+            {status.data && !status.data.photo && <span className="text-xs text-warn">Ainda não configurada (Configurações › Integrações).</span>}
           </label>
           <label className="card flex cursor-pointer flex-col items-center gap-2 p-6 text-center hover:border-copper">
             <FileCode2 size={36} className="text-copper" />
@@ -952,21 +935,14 @@ function NoteImport({ stock, onDone }) {
             {doc.total != null && Math.abs(Math.round(doc.total * 100) - total) > 1 && <span className="text-sm text-warn">A nota diz {money(Math.round(doc.total * 100))} — confira quantidades e preços (frete e descontos não entram).</span>}
             <div className="ml-auto flex gap-2">
               <button className="btn-ghost" onClick={() => { setDoc(null); setPreview(null); }}>Descartar</button>
-              <button className="btn-primary" disabled={!!busy || !doc.lines.length || (doc.supplier || '').trim().length < 2} onClick={confirm} data-note-confirm><CheckCircle2 size={16} /> Lançar no estoque</button>
+              <button className="btn-primary" disabled={!!busy} aria-disabled={(!doc.lines.length || (doc.supplier || '').trim().length < 2) || undefined} data-why={!doc.lines.length ? 'Adicione ao menos um item' : 'Informe o fornecedor'} onClick={confirm} data-note-confirm><CheckCircle2 size={16} /> Lançar no estoque</button>
             </div>
           </div>
         </div>
       )}
-      {status.data && s.can('configuracoes.gerenciar') && !doc && (
-        <div className="card p-4 text-sm">
-          <h3 className="flex items-center gap-2 font-display text-xl"><KeyRound size={18} /> Leitura por foto</h3>
-          {status.data.photo ? <p className="mt-1 text-muted">Ativa{status.data.own_key ? ' com a chave desta empresa' : ' pela plataforma'}. As fotos são lidas pela IA Claude (Anthropic) e não ficam guardadas.</p>
-            : <p className="mt-1 text-muted">Para ler fotos, informe uma chave da API da Anthropic (console.anthropic.com). Sem ela, use o XML da NF-e.</p>}
-          <div className="mt-2 flex gap-2"><input className="input max-w-md font-mono" type="password" autoComplete="off" placeholder={status.data.own_key ? 'manter a chave atual' : 'sk-ant-…'} value={key} onChange={(e) => setKey(e.target.value)} />
-            <button className="btn-ghost" disabled={!key} onClick={saveKey}>Salvar chave</button></div>
-        </div>
+      {s.can('configuracoes.gerenciar') && !doc && (
+        <p className="text-sm text-muted">Leitura por foto e busca da nota pelo código de barras se configuram em <Link className="font-semibold text-copper underline" to="/configuracoes/integracoes">Configurações › Integrações</Link>.</p>
       )}
-      {status.data && s.can('configuracoes.gerenciar') && !doc && <FocusTokenCard enabled={status.data.xml_by_key} onSaved={status.reload} />}
     </div>
   );
 }

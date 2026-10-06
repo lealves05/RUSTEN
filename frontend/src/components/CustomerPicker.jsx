@@ -89,7 +89,7 @@ export default function CustomerPicker({ onChange, onName, autoFocus }) {
             <input className="input" placeholder="Celular com DDD (opcional)" inputMode="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.consent_whatsapp} onChange={(e) => setForm({ ...form, consent_whatsapp: e.target.checked })} />
               Cliente aceita receber novidades por WhatsApp</label>
-            <button type="button" className="btn-primary w-full" disabled={form.name.trim().length < 2 || saving} onClick={create}>{saving ? 'Salvando…' : 'Cadastrar cliente'}</button>
+            <button type="button" className="btn-primary w-full" disabled={saving} aria-disabled={(form.name.trim().length < 2) || undefined} data-why={'Informe o nome do cliente'} onClick={create}>{saving ? 'Salvando…' : 'Cadastrar cliente'}</button>
             {err && <p className="text-sm text-rust">{err.message}</p>}
           </div>
         ) : <p className="mt-1 text-sm text-muted">CPF sem cadastro. Informe o nome abaixo.</p>

@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import './index.css';
 import { SessionProvider, useSession } from './lib/session.jsx';
-import { Loading, ToastProvider } from './components/ui.jsx';
+import { AskProvider, Loading, ToastProvider } from './components/ui.jsx';
 import Layout from './components/Layout.jsx';
 import Login, { ForgotPassword, ResetPassword } from './pages/Login.jsx';
 import Register from './pages/Register.jsx';
@@ -61,6 +61,7 @@ function App() {
       <Route path="/assinatura" element={s.loading ? <Loading /> : !s.me ? <Navigate to="/entrar" replace />
         : <Suspense fallback={<Loading />}><Subscription standalone /></Suspense>} />
       <Route path="/painel-tv" element={<Guard>{L(<TvBoard />)}</Guard>} />
+      <Route path="/cozinha/tela" element={<Guard><div className="min-h-screen bg-bg p-3">{L(<Kitchen kiosk />)}</div></Guard>} />
       <Route element={<Guard><Layout /></Guard>}>
         <Route index element={<Suspense fallback={<Loading />}><Home /></Suspense>} />
         <Route path="pdv" element={<Suspense fallback={<Loading />}><Pdv /></Suspense>} />
@@ -90,7 +91,7 @@ createRoot(document.getElementById('root')).render(
   <StrictMode>
     <BrowserRouter>
       <SessionProvider>
-        <ToastProvider><App /></ToastProvider>
+        <ToastProvider><AskProvider><App /></AskProvider></ToastProvider>
       </SessionProvider>
     </BrowserRouter>
   </StrictMode>,

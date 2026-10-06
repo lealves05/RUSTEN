@@ -90,6 +90,9 @@ export async function api(path, { method = 'GET', body, retry = true, signal } =
   return data;
 }
 
+// Endereço absoluto de um recurso da API (ex.: foto do produto num <img>)
+export const apiUrl = (path) => `${BASE}${path}`;
+
 export const newKey = () => (crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : `${Date.now()}${Math.random().toString(36).slice(2)}`);
 
 // Download autenticado (CSV etc.)

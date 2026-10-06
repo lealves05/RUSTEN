@@ -4,7 +4,7 @@ import { Cake, Download, Gift, NotebookPen, Plus, Search, Upload, Users } from '
 import { api, download } from '../lib/api.js';
 import { money, dateTime, dateBR } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
-import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHeader, Toggle, useLoad, useToast } from '../components/ui.jsx';
+import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHeader, Toggle, useLoad, useToast, useAsk } from '../components/ui.jsx';
 import { cpfMask, cpfDigits, cpfValid } from '../components/CustomerPicker.jsx';
 import { AccountPanel, OpenAccountsModal } from '../components/Account.jsx';
 
@@ -135,17 +135,20 @@ function CustomerModal({ data, onClose, onSaved }) {
 }
 
 function CustomerView({ id, onClose, onEdit, onChanged }) {
+  const ask = useAsk();
   const s = useSession();
   const toast = useToast();
   const d = useLoad(() => (id ? api(`/api/customers/${id}`) : Promise.resolve(null)), [id]);
   if (!id) return null;
   const adjust = async () => {
-    const pts = Number(prompt('Pontos a creditar (use negativo para debitar):')); if (!pts) return;
-    const reason = prompt('Motivo do ajuste:'); if (!reason) return;
+    const v = await ask.value({ title: 'Ajustar pontos', label: 'Pontos', message: 'Número positivo credita; negativo (ex.: -20) debita.', inputMode: 'numeric', placeholder: 'ex.: 20 ou -20',
+      validate: (t) => (Number.isInteger(Number(t)) && Number(t) !== 0 ? null : 'Informe um número inteiro diferente de zero') }); if (!v) return;
+    const pts = Number(v);
+    const reason = await ask.reason({ title: 'Motivo do ajuste de pontos', reasons: ['Compra anterior ao cadastro', 'Correção', 'Cortesia'] }); if (!reason) return;
     try { await api(`/api/customers/${id}/points`, { method: 'POST', body: { points: pts, reason } }); d.reload(); onChanged(); } catch (e) { toast(e.message, 'bad'); }
   };
   const anonymize = async () => {
-    const reason = prompt('Anonimizar remove nome, CPF, contatos e endereço. Consumos e pagamentos são preservados.\nMotivo:'); if (!reason) return;
+    const reason = await ask.reason({ title: 'Anonimizar cliente', danger: true, confirmLabel: 'Anonimizar', message: 'Remove nome, CPF, contatos e endereço. Consumos e pagamentos são preservados.', reasons: ['Pedido do titular (LGPD)', 'Cadastro duplicado'] }); if (!reason) return;
     try { await api(`/api/customers/${id}/anonymize`, { method: 'POST', body: { reason } }); onClose(); onChanged(); toast('Cliente anonimizado'); } catch (e) { toast(e.message, 'bad'); }
   };
   const c = d.data?.customer;
@@ -216,7 +219,7 @@ function ImportModal({ open, onClose, onDone }) {
     try { const r = await api('/api/customers/import', { method: 'POST', body: { rows, dry_run: false } }); toast(`${r.valid} cliente(s) importado(s)`); onDone(); onClose(); } catch (x) { setErr(x); }
   };
   return (
-    <Modal open={open} wide onClose={onClose} title="Importar clientes" footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" disabled={!preview?.valid} onClick={go}>Importar {preview?.valid || 0}</button></>}>
+    <Modal open={open} wide onClose={onClose} title="Importar clientes" footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" aria-disabled={(!preview?.valid) || undefined} data-why={'Escolha o arquivo e confira a prévia antes de importar'} onClick={go}>Importar {preview?.valid || 0}</button></>}>
       <p className="text-sm text-muted">Arquivo CSV (exportado do Excel) com colunas <b>nome</b>, <b>cpf</b>, <b>telefone</b>, <b>email</b>, <b>aniversario</b>. Duplicados por CPF ou telefone são ignorados. Importar não registra consentimento de marketing.</p>
       <input type="file" accept=".csv,text/csv" className="mt-3" onChange={onFile} />
       {preview && (

@@ -48,7 +48,7 @@ export function InfinitePayCharge({ session, amountC, phone, onPaid }) {
         <p className="text-sm text-muted">Gera um link da InfinitePay com o valor acima. O cliente paga por <b>Pix ou cartão</b> no celular dele (lendo o QR) e o pagamento entra na comanda sozinho.</p>
         {charge?.status === 'erro' && <p className="text-sm text-rust">{charge.note}</p>}
         <ErrorBox error={err} />
-        <button className="btn-primary btn-xl w-full" disabled={busy || !amountC} onClick={create} data-ip-create>{busy ? <Loader2 size={18} className="animate-spin" /> : <QrCode size={18} />} Gerar cobrança de {money(amountC)}</button>
+        <button className="btn-primary btn-xl w-full" disabled={busy} aria-disabled={(!amountC) || undefined} data-why={'Informe o valor da cobrança'} onClick={create} data-ip-create>{busy ? <Loader2 size={18} className="animate-spin" /> : <QrCode size={18} />} Gerar cobrança de {money(amountC)}</button>
       </div>
     );
   }

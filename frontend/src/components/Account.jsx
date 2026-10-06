@@ -4,7 +4,7 @@ import { HandCoins, NotebookPen, PiggyBank } from 'lucide-react';
 import { api, newKey } from '../lib/api.js';
 import { money, parseCents, centsToInput, dateTime } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
-import { Badge, ErrorBox, Field, Loading, Modal, useLoad, useToast } from './ui.jsx';
+import { Badge, ErrorBox, Field, Loading, Modal, useAsk, useLoad, useToast } from './ui.jsx';
 
 const MONEY_METHODS = [['dinheiro', 'Dinheiro'], ['pix', 'Pix'], ['debito', 'Débito'], ['credito', 'Crédito']];
 const daysSince = (d) => (d ? Math.max(0, Math.floor((Date.now() - new Date(d).getTime()) / 86400000)) : 0);
@@ -48,7 +48,7 @@ export function AccountMoneyModal({ open, mode, customerId, customerName, debt =
   };
   return (
     <Modal open onClose={onClose} title={mode === 'settle' ? `Receber fiado — ${customerName}` : `Lançar crédito — ${customerName}`}
-      footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" disabled={!cents || busy} onClick={go} data-account-confirm>{busy ? 'Registrando…' : `Registrar ${cents ? money(cents) : ''}`}</button></>}>
+      footer={<><button className="btn-ghost" onClick={onClose}>Cancelar</button><button className="btn-primary" disabled={busy} aria-disabled={(!cents) || undefined} data-why={'Informe o valor'} onClick={go} data-account-confirm>{busy ? 'Registrando…' : `Registrar ${cents ? money(cents) : ''}`}</button></>}>
       {mode === 'settle' ? <p className="mb-3 text-sm">Fiado em aberto: <b className="text-rust">{money(debt)}</b>. Pode receber parte ou tudo.</p>
         : <p className="mb-3 text-sm text-muted">O cliente deixa um valor antecipado; ele é usado depois como forma de pagamento ("Crédito do cliente") em qualquer comanda dele.</p>}
       <div className="grid grid-cols-4 gap-2">
@@ -66,6 +66,7 @@ export function AccountMoneyModal({ open, mode, customerId, customerName, debt =
 export function AccountPanel({ customerId, customerName, onChanged }) {
   const s = useSession();
   const toast = useToast();
+  const ask = useAsk();
   const a = useLoad(() => api(`/api/accounts/customers/${customerId}`), [customerId]);
   const [modal, setModal] = useState(null);
   const [limit, setLimit] = useState(null);
@@ -74,13 +75,14 @@ export function AccountPanel({ customerId, customerName, onChanged }) {
   const d = a.data;
   const reload = () => { a.reload(); onChanged?.(); };
   const adjust = async () => {
-    const v = prompt('Ajuste em R$ (use sinal: 50 aumenta o crédito, -50 aumenta o fiado):'); if (!v) return;
+    const v = await ask.value({ title: 'Ajustar conta do cliente', message: 'Valor positivo aumenta o crédito do cliente; negativo (ex.: -50) aumenta o fiado.', label: 'Ajuste em R$', inputMode: 'decimal', placeholder: 'ex.: 50 ou -50',
+      validate: (t) => (parseCents(t.replace('-', '')) ? null : 'Informe um valor, ex.: 50 ou -50') }); if (!v) return;
     const cents = parseCents(v.replace('-', '')); if (!cents) return;
-    const reason = prompt('Motivo do ajuste (mín. 10 caracteres):'); if (!reason) return;
+    const reason = await ask.reason({ title: 'Motivo do ajuste', min: 10, reasons: ['Acerto combinado com o cliente', 'Correção de lançamento errado', 'Cortesia da casa'] }); if (!reason) return;
     try { await api(`/api/accounts/customers/${customerId}/adjust`, { method: 'POST', body: { amount_cents: v.trim().startsWith('-') ? -cents : cents, reason } }); toast('Ajuste registrado'); reload(); } catch (e) { toast(e.message, 'bad'); }
   };
   const reverse = async (e) => {
-    const reason = prompt('Motivo do estorno:'); if (!reason) return;
+    const reason = await ask.reason({ title: 'Estornar lançamento', danger: true, confirmLabel: 'Estornar', reasons: ['Lançado em duplicidade', 'Valor errado', 'Cliente errado'] }); if (!reason) return;
     try { await api(`/api/accounts/entries/${e.id}/reverse`, { method: 'POST', body: { reason } }); toast('Lançamento estornado'); reload(); } catch (x) { toast(x.message, 'bad'); }
   };
   const saveLimit = async () => {
@@ -103,8 +105,8 @@ export function AccountPanel({ customerId, customerName, onChanged }) {
         </div>
         <div className="flex flex-col gap-2">
           {!d.has_cpf && <Badge tone="warn">Cadastre o CPF para usar a conta</Badge>}
-          {s.can('pdv.receber') && d.debt_cents > 0 && <button className="btn-primary" disabled={!d.has_cpf} onClick={() => setModal('settle')}><HandCoins size={16} /> Receber fiado</button>}
-          {s.can('pdv.receber') && <button className="btn-ghost" disabled={!d.has_cpf} onClick={() => setModal('credit')} data-account-credit><PiggyBank size={16} /> Lançar crédito</button>}
+          {s.can('pdv.receber') && d.debt_cents > 0 && <button className="btn-primary" aria-disabled={(!d.has_cpf) || undefined} data-why={'Cadastre o CPF do cliente para usar fiado'} onClick={() => setModal('settle')}><HandCoins size={16} /> Receber fiado</button>}
+          {s.can('pdv.receber') && <button className="btn-ghost" aria-disabled={(!d.has_cpf) || undefined} data-why={'Cadastre o CPF do cliente para lançar crédito'} onClick={() => setModal('credit')} data-account-credit><PiggyBank size={16} /> Lançar crédito</button>}
           {s.can('pdv.autorizar') && s.can('clientes.gerenciar') && <button className="text-xs underline" onClick={adjust}>ajuste gerencial</button>}
         </div>
       </div>

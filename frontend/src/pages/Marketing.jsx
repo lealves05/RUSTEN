@@ -4,7 +4,7 @@ import { Megaphone, MessageCircle, Plus, Send, Star } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { dateTime } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
-import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHeader, useLoad, useToast } from '../components/ui.jsx';
+import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHeader, useLoad, useToast, useAsk } from '../components/ui.jsx';
 
 const TABS = [['avaliacoes', 'Avaliações'], ['campanhas', 'Campanhas']];
 const STATUS = { rascunho: ['muted', 'Rascunho'], preparada: ['warn', 'Preparada'], enviada: ['ok', 'Enviada'], cancelada: ['muted', 'Cancelada'] };
@@ -24,6 +24,7 @@ export default function Marketing() {
 }
 
 function Reviews() {
+  const ask = useAsk();
   const s = useSession();
   const toast = useToast();
   const [days, setDays] = useState(30);
@@ -31,7 +32,7 @@ function Reviews() {
   if (r.loading && !r.data) return <Loading />;
   if (r.error) return <ErrorBox error={r.error} onRetry={r.reload} />;
   const { stats, distribution, items } = r.data;
-  const handle = async (x) => { const note = prompt('O que foi feito? (ex.: liguei e ofereci cortesia)'); if (!note) return; try { await api(`/api/marketing/reviews/${x.id}/handled`, { method: 'POST', body: { note } }); r.reload(); } catch (e) { toast(e.message, 'bad'); } };
+  const handle = async (x) => { const note = await ask.reason({ title: 'Avaliação tratada', label: 'O que foi feito?', reasons: ['Liguei e pedi desculpas', 'Ofereci cortesia na próxima visita', 'Respondi por WhatsApp', 'Repassei à equipe'] }); if (!note) return; try { await api(`/api/marketing/reviews/${x.id}/handled`, { method: 'POST', body: { note } }); r.reload(); } catch (e) { toast(e.message, 'bad'); } };
   const max = Math.max(1, ...distribution.map((d) => d.n));
   return (
     <div className="space-y-4">
@@ -61,6 +62,7 @@ function Reviews() {
 }
 
 function Campaigns() {
+  const ask = useAsk();
   const s = useSession();
   const toast = useToast();
   const c = useLoad(() => api('/api/marketing/campaigns'), []);
@@ -69,7 +71,7 @@ function Campaigns() {
   if (c.loading && !c.data) return <Loading />;
   const prepare = async (x) => { try { const r = await api(`/api/marketing/campaigns/${x.id}/prepare`, { method: 'POST' }); toast(`${r.recipients} destinatário(s)`); c.reload(); } catch (e) { toast(e.message, 'bad'); } };
   const send = async (x) => {
-    if (!confirm(`Enviar "${x.name}" pelo WhatsApp oficial para ${x.recipients} cliente(s)?`)) return;
+    if (!await ask.confirm({ title: 'Enviar campanha', message: `Enviar "${x.name}" pelo WhatsApp oficial para ${x.recipients} cliente(s)?`, confirmLabel: 'Enviar agora' })) return;
     try { const r = await api(`/api/marketing/campaigns/${x.id}/send`, { method: 'POST', body: { base_url: location.origin } }); toast(`${r.sent} enviada(s), ${r.failed} falha(s)`, r.failed ? 'warn' : 'ok'); c.reload(); } catch (e) { toast(e.message, 'bad'); }
   };
   return (

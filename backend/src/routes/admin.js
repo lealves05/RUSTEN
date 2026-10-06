@@ -164,7 +164,13 @@ const companySchema = z.object({
   phone: z.string().max(30).nullable(), email: z.string().email().max(160).nullable(), timezone: z.string().max(60),
   address: z.record(z.string(), z.string().max(160)),
   appearance: z.object({ theme: z.enum(['claro', 'escuro', 'auto']).optional(), density: z.enum(['confortavel', 'compacta']).optional(),
-    menu: z.enum(['lateral', 'superior']).optional(), accent: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional() }),
+    menu: z.enum(['lateral', 'superior']).optional(), accent: z.string().regex(/^#[0-9a-fA-F]{6}$/).or(z.literal('')).optional(),
+    font_display: z.enum(['bebas', 'oswald', 'anton', 'playfair', 'righteous', 'montserrat', 'lobster', 'inter']).optional(),
+    font_body: z.enum(['inter', 'roboto', 'nunito', 'poppins', 'lato', 'source']).optional(),
+    radius: z.enum(['reto', 'padrao', 'arredondado']).optional(), sidebar: z.enum(['padrao', 'cor', 'escura', 'transparente']).optional(),
+    logo_mode: z.enum(['rusten', 'logo', 'logo_nome', 'nome']).optional(), brand_title: z.string().max(40).optional(), brand_subtitle: z.string().max(60).optional(),
+    logo_size: z.number().int().min(24).max(96).optional(), bg_overlay: z.number().min(0).max(0.95).optional(), bg_blur: z.boolean().optional(),
+    bg_fit: z.enum(['cobrir', 'repetir', 'centro']).optional() }),
 }).partial();
 
 router.get('/settings', h(async (req, res) => {

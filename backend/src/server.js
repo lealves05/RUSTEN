@@ -10,6 +10,7 @@ import { migrate } from './migrate.js';
 import { router as authRouter } from './routes/auth.js';
 import { router as adminRouter } from './routes/admin.js';
 import { router as menuRouter } from './routes/menu.js';
+import { router as brandRouter } from './routes/brand.js';
 import { router as floorRouter } from './routes/floor.js';
 import { router as pdvRouter } from './routes/pdv.js';
 import { router as cashRouter } from './routes/cash.js';
@@ -52,7 +53,7 @@ export function createApp() {
   const verify = (req, _res, buf) => { req.rawBody = buf.toString('utf8'); };
   const bigJson = express.json({ limit: '9mb', verify });
   const json = express.json({ limit: '1mb', verify });
-  const BIG = /^\/api\/(stock\/notes\/read|pos-sales(\/preview)?)\/?$/;
+  const BIG = /^\/api\/(stock\/notes\/read|pos-sales(\/preview)?|brand\/(fundo|tv_fundo|logo))\/?$/;
   app.use((req, res, next) => (BIG.test(req.path) ? bigJson : json)(req, res, next));
 
   app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'rusten-api' }));
@@ -64,6 +65,7 @@ export function createApp() {
 
   const gated = [auth(), requireAccess()];
   app.use('/api/admin', ...gated, adminRouter);
+  app.use('/api/brand', ...gated, brandRouter);
   app.use('/api/home', ...gated, homeRouter);
   app.use('/api/menu', ...gated, requireAccess('cardapio'), menuRouter);
   app.use('/api/floor', ...gated, floorRouter);

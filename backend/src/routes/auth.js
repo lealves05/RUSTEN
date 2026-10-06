@@ -1,5 +1,6 @@
 // Cadastro da empresa, login, renovação de sessão, saída e troca de senha.
 import { Router } from 'express';
+import { brandVersions } from './brand.js';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import { z } from 'zod';
@@ -350,6 +351,7 @@ router.get('/me', auth(), h(async (req, res) => {
   res.json({
     user: { id: c.userId, name: c.name, email: c.email, role: c.role, roleName: c.roleName, level: c.level, unitId: c.unitId },
     company: c.company,
+    brand: await brandVersions({ query: q }, c.companyId),
     permissions: [...c.perms],
     access: c.access,
     units: units.rows,

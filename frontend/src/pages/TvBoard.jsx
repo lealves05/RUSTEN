@@ -6,6 +6,7 @@ import { Link } from 'react-router-dom';
 import { ArrowLeft, Maximize2, Settings2, Volume2, X } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
+import { useBrandImage } from '../lib/brand.js';
 
 export const BACKGROUNDS = {
   noite: { label: 'Noite', css: 'radial-gradient(circle at 20% 10%, #2a2a33 0%, #0b0b0f 60%)', ink: '#fff', accent: '#ffb347' },
@@ -14,7 +15,9 @@ export const BACKGROUNDS = {
   oceano: { label: 'Oceano', css: 'linear-gradient(160deg, #001f3f 0%, #0074d9 100%)', ink: '#ffffff', accent: '#7fdbff' },
   quadro: { label: 'Quadro-negro', css: 'repeating-linear-gradient(45deg, #1e2b22 0 14px, #1b2720 14px 28px)', ink: '#f5f5e8', accent: '#ffd23f' },
   claro: { label: 'Claro', css: 'linear-gradient(180deg, #fffaf2 0%, #f3e6d3 100%)', ink: '#1d1208', accent: '#b5541c' },
-  imagem: { label: 'Imagem (URL)', css: null, ink: '#ffffff', accent: '#ffcc33' },
+  marca: { label: 'Cor da marca', css: null, ink: '#ffffff', accent: '#ffe08a' },
+  empresa: { label: 'Imagem da empresa', css: null, ink: '#ffffff', accent: '#ffcc33' },
+  imagem: { label: 'Imagem (endereço)', css: null, ink: '#ffffff', accent: '#ffcc33' },
 };
 export const FONTS = {
   bebas: { label: 'Bebas (padrão)', family: '"Bebas Neue", Impact, sans-serif' },
@@ -27,9 +30,14 @@ export const FONTS = {
 };
 const FONT_CSS = 'https://fonts.googleapis.com/css2?family=Anton&family=Bungee&family=Permanent+Marker&family=Righteous&display=swap';
 export const SOUNDS = { sino: 'Sino', campainha: 'Campainha de balcão', fanfarra: 'Fanfarra', arcade: 'Arcade', suave: 'Suave', nenhum: 'Sem som' };
-const DEFAULTS = { bg: 'noite', image: '', font: 'bebas', sound: 'fanfarra', volume: 0.8, voice: true, seconds: 10, fireworks: true, fireworksSound: true, showName: true, showItems: true, showQueue: true, title: 'Pedidos' };
+export const DEFAULTS = { bg: 'noite', image: '', font: 'bebas', sound: 'fanfarra', volume: 0.8, voice: true, seconds: 10, fireworks: true, fireworksSound: true, showName: true, showItems: true, showQueue: true, title: 'Pedidos',
+  showLogo: true, showClock: true, logoSize: 9, scale: 1, overlay: 0.35, ink: '', accent: '', readyLabel: 'Pronto para retirar', queueLabel: 'Em preparo', emptyLabel: 'Nenhum pedido no momento',
+  ticker: '', voiceText: 'Seu pedido está pronto!', voiceRate: 0.95, cardStyle: 'solido' };
 const KEY = 'rusten.tv';
-const load = () => { try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch { return { ...DEFAULTS }; } };
+// esta TV tem estilo próprio? (senão vale o padrão salvo pela empresa)
+const local = () => { try { const v = localStorage.getItem(KEY); return v ? JSON.parse(v) : null; } catch { return null; } };
+const load = () => ({ ...DEFAULTS, ...(local() || {}) });
+const pickTv = (c) => Object.fromEntries(Object.keys(DEFAULTS).map((k) => [k, c[k] ?? DEFAULTS[k]]));
 
 let audio;
 // Sons sintetizados (não dependem de arquivos): cada um é uma sequência de notas
@@ -86,8 +94,8 @@ const label = (o) => (o.kind === 'mesa' ? 'Mesa' : o.kind === 'delivery' || o.ki
 export function speak(o, cfg) {
   if (!cfg.voice || !window.speechSynthesis) return;
   try {
-    const u = new SpeechSynthesisUtterance(`${label(o)} ${o.code.replace('#', '')}${cfg.showName && o.name ? `, ${o.name}` : ''}. Seu pedido está pronto!${o.__multi && o.sector ? ` Retirada: ${o.sector}.` : ''}`);
-    u.lang = 'pt-BR'; u.rate = 0.95; u.volume = Math.min(1, cfg.volume + 0.2);
+    const u = new SpeechSynthesisUtterance(`${label(o)} ${o.code.replace('#', '')}${cfg.showName && o.name ? `, ${o.name}` : ''}. ${cfg.voiceText || DEFAULTS.voiceText}${o.__multi && o.sector ? ` Retirada: ${o.sector}.` : ''}`);
+    u.lang = 'pt-BR'; u.rate = cfg.voiceRate || 0.95; u.volume = Math.min(1, cfg.volume + 0.2);
     const v = window.speechSynthesis.getVoices().find((x) => /pt[-_]BR/i.test(x.lang) && /female|mulher|maria|luciana|francisca/i.test(x.name))
       || window.speechSynthesis.getVoices().find((x) => /pt[-_]BR/i.test(x.lang));
     if (v) u.voice = v;
@@ -106,6 +114,14 @@ export default function TvBoard() {
   const queue = useRef([]);
   const known = useRef(null); // id → marca (pronto/chamado) já anunciada
   const save = (patch) => setCfg((c) => { const n = { ...c, ...patch }; try { localStorage.setItem(KEY, JSON.stringify(n)); } catch { /* sem armazenamento */ } return n; });
+  const [company, setCompany] = useState(null); // padrão das TVs da empresa
+  useEffect(() => {
+    api('/api/brand/tv').then((t) => { setCompany(t || {}); if (t && !local()) setCfg({ ...DEFAULTS, ...t }); }).catch(() => setCompany({}));
+  }, []);
+  const logo = useBrandImage('logo', cfg.showLogo ? s.me?.brand?.logo_v : null);
+  const tvImg = useBrandImage('tv_fundo', cfg.bg === 'empresa' ? s.me?.brand?.tv_fundo_v : null);
+  const sysImg = useBrandImage('fundo', cfg.bg === 'empresa' && !s.me?.brand?.tv_fundo_v ? s.me?.brand?.fundo_v : null);
+  const brandAccent = s.me?.company?.settings?.appearance?.accent || '#ce8a48';
 
   useEffect(() => {
     if (document.querySelector(`link[href="${FONT_CSS}"]`)) return;
@@ -170,8 +186,12 @@ export default function TvBoard() {
     return () => clearInterval(t);
   }, [started, cfg.seconds, announce]);
 
-  const bg = BACKGROUNDS[cfg.bg] || BACKGROUNDS.noite;
-  const background = cfg.bg === 'imagem' && cfg.image ? `center/cover no-repeat url("${cfg.image.replace(/"/g, '')}"), #000` : (bg.css || BACKGROUNDS.noite.css);
+  const base = BACKGROUNDS[cfg.bg] || BACKGROUNDS.noite;
+  const bg = { ...base, ink: cfg.ink || base.ink, accent: cfg.accent || base.accent };
+  const veil = `linear-gradient(rgba(0,0,0,${cfg.overlay}), rgba(0,0,0,${cfg.overlay}))`;
+  const imgUrl = cfg.bg === 'imagem' ? cfg.image : cfg.bg === 'empresa' ? (tvImg || sysImg) : null;
+  const background = imgUrl ? `${veil}, center/cover no-repeat url("${String(imgUrl).replace(/"/g, '')}"), #000`
+    : cfg.bg === 'marca' ? `radial-gradient(circle at 20% 0%, ${brandAccent} 0%, #140c06 75%)` : (base.css || BACKGROUNDS.noite.css);
   const font = (FONTS[cfg.font] || FONTS.bebas).family;
   const areas = (data?.areas || []).filter((a) => a.orders.length);
   const start = () => { setStarted(true); playSound('suave', cfg.volume * 0.5); document.documentElement.requestFullscreen?.().catch(() => {}); };
@@ -191,12 +211,16 @@ export default function TvBoard() {
         @keyframes tvHalo { 0%,100% { transform: scale(.85); opacity: .6 } 50% { transform: scale(1.15); opacity: 1 } }
         @keyframes tvShake { 0%,100% { transform: translate(0,0) } 15% { transform: translate(-1.2vw,.6vw) } 30% { transform: translate(1vw,-.8vw) } 45% { transform: translate(-.6vw,.4vw) } 60% { transform: translate(.4vw,-.2vw) } }
         @keyframes tvIn { from { opacity: 0; transform: scale(.96) } to { opacity: 1; transform: scale(1) } }
+        @keyframes tvTicker { from { transform: translateX(100vw) } to { transform: translateX(-100%) } }
       `}</style>
       {/* cabeçalho */}
       <div className="flex items-center justify-between px-[3vw] pt-[2vh]">
-        <div className="text-[4.2vw] leading-none tracking-wide">{cfg.title}{areas.length === 1 && areas[0].name ? <span className="opacity-60"> · {areas[0].name}</span> : null}</div>
+        <div className="flex min-w-0 items-center gap-[1.5vw]">
+          {cfg.showLogo && logo && <img src={logo} alt="" style={{ height: `${cfg.logoSize}vh`, maxWidth: '30vw' }} className="object-contain" data-tv-logo />}
+          <div className="truncate leading-none tracking-wide" style={{ fontSize: `${4.2 * cfg.scale}vw` }}>{cfg.title}{areas.length === 1 && areas[0].name ? <span className="opacity-60"> · {areas[0].name}</span> : null}</div>
+        </div>
         <div className="flex items-center gap-3 text-[1.6vw] opacity-80">
-          <Clock />
+          {cfg.showClock && <span style={{ fontSize: `${1.6 * cfg.scale}vw` }}><Clock /></span>}
           <button onClick={() => setShowCfg(true)} className="rounded-full p-2 opacity-40 hover:opacity-100" aria-label="Configurar painel"><Settings2 size={22} /></button>
           <button onClick={() => document.documentElement.requestFullscreen?.()} className="rounded-full p-2 opacity-40 hover:opacity-100" aria-label="Tela cheia"><Maximize2 size={22} /></button>
           <Link to="/cozinha" className="rounded-full p-2 opacity-40 hover:opacity-100" aria-label="Voltar"><ArrowLeft size={22} /></Link>
@@ -205,9 +229,14 @@ export default function TvBoard() {
       {/* um painel por setor com demanda: dois setores dividem a tela ao meio; um só ocupa a tela toda */}
       <div className="flex min-h-0 flex-1 gap-[1.5vw] px-[2vw] pb-[2vh] pt-[2vh]">
         {areas.length ? areas.map((a) => <Area key={a.id} a={a} n={areas.length} cfg={cfg} bg={bg} />) : (
-          <div className="grid flex-1 place-items-center rounded-[2vw] text-[3vw] opacity-50" style={{ background: 'rgba(0,0,0,.18)' }} data-tv-empty>Nenhum pedido no momento</div>
+          <div className="grid flex-1 place-items-center rounded-[2vw] text-[3vw] opacity-50" style={{ background: 'rgba(0,0,0,.18)' }} data-tv-empty>{cfg.emptyLabel}</div>
         )}
       </div>
+      {cfg.ticker && (
+        <div className="overflow-hidden whitespace-nowrap py-[1vh]" style={{ background: 'rgba(0,0,0,.35)', color: bg.accent, fontSize: `${2 * cfg.scale}vw` }} data-tv-ticker>
+          <span className="inline-block" style={{ animation: `tvTicker ${Math.max(12, cfg.ticker.length / 4)}s linear infinite` }}>{cfg.ticker}</span>
+        </div>
+      )}
       {err && <div className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded bg-black/60 px-3 py-1 text-sm text-white" style={{ fontFamily: 'Inter, sans-serif' }}>Sem conexão — tentando de novo…</div>}
 
       {/* destaque extravagante */}
@@ -222,7 +251,11 @@ export default function TvBoard() {
           </span>
         </button>
       )}
-      {showCfg && <TvSettings cfg={cfg} save={save} onClose={() => setShowCfg(false)} onTest={() => { const o = sample() || { id: 0, key: 'teste', code: '12', kind: 'comanda', name: 'Ana', sector: 'Bar', __multi: true, items: [{ d: 'Caipirinha', q: 1 }] }; queue.current.unshift({ ...o, __test: true }); spotRef.current = null; setShowCfg(false); }} />}
+      {showCfg && <TvSettings cfg={cfg} save={save} company={company} logo={!!s.me?.brand?.logo_v} hasImg={!!(s.me?.brand?.tv_fundo_v || s.me?.brand?.fundo_v)}
+        canDefault={s.can('configuracoes.gerenciar')}
+        onSaveDefault={async () => { const t = pickTv(cfg); await api('/api/brand/tv', { method: 'PUT', body: t }); setCompany(t); }}
+        onUseDefault={() => { try { localStorage.removeItem(KEY); } catch { /* sem armazenamento */ } setCfg({ ...DEFAULTS, ...(company || {}) }); }}
+        onClose={() => setShowCfg(false)} onTest={() => { const o = sample() || { id: 0, key: 'teste', code: '12', kind: 'comanda', name: 'Ana', sector: 'Bar', __multi: true, items: [{ d: 'Caipirinha', q: 1 }] }; queue.current.unshift({ ...o, __test: true }); spotRef.current = null; setShowCfg(false); }} />}
     </div>
   );
 }
@@ -231,18 +264,18 @@ export default function TvBoard() {
 function Area({ a, n, cfg, bg }) {
   const preparing = a.orders.filter((o) => o.status === 'preparando' || o.pending > 0);
   const ready = a.orders.filter((o) => o.status === 'pronto').sort((x, y) => new Date(y.called_at || y.ready_at) - new Date(x.called_at || x.ready_at));
-  const k = n === 1 ? 1 : n === 2 ? 0.72 : 0.56; // escala das letras
+  const k = (n === 1 ? 1 : n === 2 ? 0.72 : 0.56) * (cfg.scale || 1); // escala das letras
   const v = (x) => `${(x * k).toFixed(2)}vw`;
   const split = n > 1; // dividido: prontos em cima, fila embaixo
   const readyCols = n === 1 ? 3 : 2;
   const queueCols = n === 1 ? 3 : n === 2 ? 3 : 2;
   const Ready = (
     <section className="flex min-h-0 flex-col rounded-[1.6vw] p-[1.2vw]" style={{ flex: split ? '3 1 0' : '1.5 1 0', background: 'rgba(0,0,0,.18)', boxShadow: `inset 0 0 0 .3vw ${bg.accent}55` }}>
-      <h2 className="leading-none" style={{ color: bg.accent, fontSize: v(2.8) }}>Pronto para retirar</h2>
+      <h2 className="leading-none" style={{ color: bg.accent, fontSize: v(2.8) }}>{cfg.readyLabel}</h2>
       <div className="mt-[1.2vh] grid flex-1 auto-rows-min gap-[1vw] overflow-hidden" style={{ gridTemplateColumns: `repeat(${readyCols}, minmax(0,1fr))` }}>
         {ready.map((o, i) => (
           <div key={o.key} className="rounded-[1.2vw] px-[1vw] py-[1vh] text-center" data-tv-ready={o.code}
-            style={{ background: i === 0 ? bg.accent : 'rgba(255,255,255,.12)', color: i === 0 ? '#111' : bg.ink, animation: i === 0 ? 'tvPulse 1.6s ease-in-out infinite' : undefined }}>
+            style={{ ...card(cfg, bg, i === 0), animation: i === 0 ? 'tvPulse 1.6s ease-in-out infinite' : undefined }}>
             <div className="uppercase opacity-70" style={{ fontSize: v(1.2) }}>{label(o)}{o.table ? ` · mesa ${o.table}` : ''}</div>
             <div className="leading-none" style={{ fontSize: v(5.5) }}>{o.code}</div>
             {cfg.showName && o.name && <div className="truncate" style={{ fontSize: v(1.6) }}>{o.name}</div>}
@@ -255,10 +288,10 @@ function Area({ a, n, cfg, bg }) {
   );
   const Queue = cfg.showQueue && (
     <section className="flex min-h-0 flex-col rounded-[1.6vw] p-[1.2vw]" style={{ flex: split ? '2 1 0' : '1 1 0', background: 'rgba(0,0,0,.28)' }}>
-      <h2 className="leading-none opacity-80" style={{ fontSize: v(2.6) }}>Em preparo <span className="opacity-60">({preparing.length})</span></h2>
+      <h2 className="leading-none opacity-80" style={{ fontSize: v(2.6) }}>{cfg.queueLabel} <span className="opacity-60">({preparing.length})</span></h2>
       <div className="mt-[1.2vh] grid flex-1 auto-rows-min gap-[0.8vw] overflow-hidden" style={{ gridTemplateColumns: `repeat(${queueCols}, minmax(0,1fr))` }}>
         {preparing.map((o) => (
-          <div key={o.key} className="rounded-[1vw] px-[0.8vw] py-[0.8vh] text-center" style={{ background: 'rgba(255,255,255,.08)' }} data-tv-preparing={o.code}>
+          <div key={o.key} className="rounded-[1vw] px-[0.8vw] py-[0.8vh] text-center" style={card(cfg, bg, false, true)} data-tv-preparing={o.code}>
             <div className="uppercase opacity-60" style={{ fontSize: v(1) }}>{label(o)}</div>
             <div className="leading-none" style={{ fontSize: v(3.6) }}>{o.code}</div>
             {cfg.showName && o.name && <div className="truncate opacity-80" style={{ fontSize: v(1.2) }}>{o.name}</div>}
@@ -283,6 +316,13 @@ function Area({ a, n, cfg, bg }) {
       </div>
     </div>
   );
+}
+
+// estilo dos cartões: sólido (padrão), vidro (translúcido) ou contorno
+function card(cfg, bg, first, queue = false) {
+  if (cfg.cardStyle === 'contorno') return { background: first ? `${bg.accent}22` : 'transparent', border: `.25vw solid ${first ? bg.accent : `${bg.ink}55`}`, color: bg.ink };
+  if (cfg.cardStyle === 'vidro') return { background: first ? `${bg.accent}cc` : 'rgba(255,255,255,.14)', backdropFilter: 'blur(8px)', border: '1px solid rgba(255,255,255,.25)', color: first ? '#111' : bg.ink };
+  return { background: first ? bg.accent : queue ? 'rgba(255,255,255,.08)' : 'rgba(255,255,255,.12)', color: first ? '#111' : bg.ink };
 }
 
 function Clock() {
@@ -378,35 +418,90 @@ function Fireworks({ accent }) {
   return <canvas ref={ref} className="pointer-events-none absolute inset-0 h-full w-full" data-tv-fireworks />;
 }
 
-function TvSettings({ cfg, save, onClose, onTest }) {
-  const row = 'grid grid-cols-[160px_1fr] items-center gap-3';
+const H = ({ children }) => <h3 className="mt-5 border-b pb-1 text-xs font-bold uppercase tracking-wider text-neutral-500">{children}</h3>;
+function Color({ k, auto, cfg, save }) {
+  return (
+    <div className="flex items-center gap-2">
+      <input type="color" value={cfg[k] || auto} onChange={(e) => save({ [k]: e.target.value })} className="h-9 w-12 cursor-pointer rounded border" aria-label={k === 'ink' ? 'Cor do texto' : 'Cor de destaque'} />
+      {cfg[k] ? <button className="text-xs underline" onClick={() => save({ [k]: '' })}>usar a do fundo</button> : <span className="text-xs text-neutral-500">a do fundo</span>}
+    </div>
+  );
+}
+
+function TvSettings({ cfg, save, onClose, onTest, company, canDefault, onSaveDefault, onUseDefault, logo, hasImg }) {
+  const [msg, setMsg] = useState('');
+  const row = 'grid grid-cols-[150px_1fr] items-center gap-3';
+  const base = BACKGROUNDS[cfg.bg] || BACKGROUNDS.noite;
   return (
     <div className="absolute inset-0 z-30 grid place-items-center bg-black/60 p-4" style={{ fontFamily: 'Inter, system-ui, sans-serif' }} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="w-full max-w-xl rounded-2xl bg-white p-6 text-neutral-900 shadow-2xl" role="dialog" aria-label="Configurar painel da TV">
-        <div className="flex items-center justify-between"><h2 className="text-xl font-bold">Configurar painel da TV</h2><button onClick={onClose} aria-label="Fechar"><X /></button></div>
-        <p className="mt-1 text-sm text-neutral-500">Vale para esta TV. Cada tela pode ter o seu estilo.</p>
-        <div className="mt-4 space-y-3 text-sm">
-          <label className={row}><span>Título</span><input className="rounded-lg border px-3 py-2" value={cfg.title} maxLength={30} onChange={(e) => save({ title: e.target.value })} /></label>
-          <div className={row}><span>Fundo</span>
-            <div className="grid grid-cols-4 gap-2">{Object.entries(BACKGROUNDS).map(([k, b]) => (
+      <div className="flex max-h-[92vh] w-full max-w-2xl flex-col rounded-2xl bg-white text-neutral-900 shadow-2xl" role="dialog" aria-label="Configurar painel da TV">
+        <div className="flex items-center justify-between border-b px-6 py-4"><h2 className="text-xl font-bold">Personalizar o Painel da TV</h2><button onClick={onClose} aria-label="Fechar"><X /></button></div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4 text-sm" data-tv-settings>
+          <p className="mt-3 text-neutral-500">As mudanças aparecem na hora e ficam guardadas nesta TV.{canDefault ? ' Você pode salvar este estilo como padrão de todas as TVs.' : ''}</p>
+
+          <H>Cabeçalho</H>
+          <div className="mt-3 space-y-3">
+            <label className={row}><span>Título</span><input className="rounded-lg border px-3 py-2" value={cfg.title} maxLength={30} onChange={(e) => save({ title: e.target.value })} /></label>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={!!cfg.showLogo} onChange={(e) => save({ showLogo: e.target.checked })} /> Mostrar o logotipo do estabelecimento {!logo && <span className="text-xs text-neutral-500">(envie em Configurações › Empresa e aparência)</span>}</label>
+            {cfg.showLogo && <label className={row}><span>Tamanho do logotipo</span><input type="range" min="4" max="20" step="1" value={cfg.logoSize} onChange={(e) => save({ logoSize: Number(e.target.value) })} /></label>}
+            <label className="flex items-center gap-2"><input type="checkbox" checked={!!cfg.showClock} onChange={(e) => save({ showClock: e.target.checked })} /> Mostrar o relógio</label>
+          </div>
+
+          <H>Fundo e cores</H>
+          <div className="mt-3 space-y-3">
+            <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">{Object.entries(BACKGROUNDS).map(([k, b]) => (
               <button key={k} onClick={() => save({ bg: k })} aria-pressed={cfg.bg === k} title={b.label}
                 className={`h-12 rounded-lg border-2 text-[10px] font-semibold ${cfg.bg === k ? 'border-orange-500' : 'border-transparent'}`}
-                style={{ background: b.css || 'repeating-linear-gradient(45deg,#ddd 0 6px,#bbb 6px 12px)', color: b.ink }}>{b.label}</button>))}</div></div>
-          {cfg.bg === 'imagem' && <label className={row}><span>Endereço da imagem</span><input className="rounded-lg border px-3 py-2" placeholder="https://…/fundo.jpg" value={cfg.image} onChange={(e) => save({ image: e.target.value })} /></label>}
-          <label className={row}><span>Tipo de letra</span>
-            <select className="rounded-lg border px-3 py-2" value={cfg.font} onChange={(e) => save({ font: e.target.value })} style={{ fontFamily: FONTS[cfg.font]?.family }}>
-              {Object.entries(FONTS).map(([k, f]) => <option key={k} value={k} style={{ fontFamily: f.family }}>{f.label}</option>)}</select></label>
-          <label className={row}><span>Som da chamada</span>
-            <select className="rounded-lg border px-3 py-2" value={cfg.sound} onChange={(e) => { save({ sound: e.target.value }); playSound(e.target.value, cfg.volume); }}>
-              {Object.entries(SOUNDS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
-          <label className={row}><span>Volume</span><input type="range" min="0.1" max="1" step="0.1" value={cfg.volume} onChange={(e) => save({ volume: Number(e.target.value) })} /></label>
-          <label className={row}><span>Destaque por</span>
-            <select className="rounded-lg border px-3 py-2" value={cfg.seconds} onChange={(e) => save({ seconds: Number(e.target.value) })}>{[6, 8, 10, 15, 20].map((n) => <option key={n} value={n}>{n} segundos</option>)}</select></label>
-          {[['fireworks', 'Fogos de artifício no destaque'], ['fireworksSound', 'Estouro dos fogos no som'], ['voice', 'Anunciar por voz ("Comanda 12, seu pedido está pronto")'], ['showName', 'Mostrar o primeiro nome do cliente'], ['showItems', 'Mostrar os itens no destaque'], ['showQueue', 'Mostrar a coluna "Em preparo"']].map(([k, l]) => (
-            <label key={k} className="flex items-center gap-2"><input type="checkbox" checked={!!cfg[k]} onChange={(e) => save({ [k]: e.target.checked })} /> {l}</label>))}
+                style={{ background: b.css || (k === 'marca' ? 'radial-gradient(circle at 20% 0%, #ce8a48 0%, #140c06 75%)' : 'repeating-linear-gradient(45deg,#ddd 0 6px,#bbb 6px 12px)'), color: b.css || k === 'marca' ? b.ink : '#111' }}>{b.label}</button>))}</div>
+            {cfg.bg === 'empresa' && !hasImg && <p className="text-xs text-orange-700">Envie a imagem em Configurações › Empresa e aparência › Fundo do Painel da TV.</p>}
+            {cfg.bg === 'imagem' && <label className={row}><span>Endereço da imagem</span><input className="rounded-lg border px-3 py-2" placeholder="https://…/fundo.jpg" value={cfg.image} onChange={(e) => save({ image: e.target.value })} /></label>}
+            {(cfg.bg === 'imagem' || cfg.bg === 'empresa') && <label className={row}><span>Escurecer a imagem</span><input type="range" min="0" max="0.85" step="0.05" value={cfg.overlay} onChange={(e) => save({ overlay: Number(e.target.value) })} /></label>}
+            <div className={row}><span>Cor do texto</span><Color k="ink" auto={base.ink} cfg={cfg} save={save} /></div>
+            <div className={row}><span>Cor de destaque</span><Color k="accent" auto={base.accent} cfg={cfg} save={save} /></div>
+            <label className={row}><span>Cartões</span>
+              <select className="rounded-lg border px-3 py-2" value={cfg.cardStyle} onChange={(e) => save({ cardStyle: e.target.value })}>
+                <option value="solido">Sólidos</option><option value="vidro">Vidro (translúcidos)</option><option value="contorno">Só contorno</option></select></label>
+          </div>
+
+          <H>Letras e textos</H>
+          <div className="mt-3 space-y-3">
+            <label className={row}><span>Tipo de letra</span>
+              <select className="rounded-lg border px-3 py-2" value={cfg.font} onChange={(e) => save({ font: e.target.value })} style={{ fontFamily: FONTS[cfg.font]?.family }}>
+                {Object.entries(FONTS).map(([k, f]) => <option key={k} value={k} style={{ fontFamily: f.family }}>{f.label}</option>)}</select></label>
+            <label className={row}><span>Tamanho das letras ({Math.round(cfg.scale * 100)}%)</span><input type="range" min="0.7" max="1.6" step="0.05" value={cfg.scale} onChange={(e) => save({ scale: Number(e.target.value) })} /></label>
+            <label className={row}><span>Título dos prontos</span><input className="rounded-lg border px-3 py-2" maxLength={40} value={cfg.readyLabel} onChange={(e) => save({ readyLabel: e.target.value })} /></label>
+            <label className={row}><span>Título da fila</span><input className="rounded-lg border px-3 py-2" maxLength={40} value={cfg.queueLabel} onChange={(e) => save({ queueLabel: e.target.value })} /></label>
+            <label className={row}><span>Sem pedidos</span><input className="rounded-lg border px-3 py-2" maxLength={60} value={cfg.emptyLabel} onChange={(e) => save({ emptyLabel: e.target.value })} /></label>
+            <label className={row}><span>Mensagem no rodapé</span><input className="rounded-lg border px-3 py-2" maxLength={200} placeholder="ex.: Happy hour até 20h · Chopp em dobro às quintas" value={cfg.ticker} onChange={(e) => save({ ticker: e.target.value })} /></label>
+            {[['showName', 'Mostrar o primeiro nome do cliente'], ['showItems', 'Mostrar os itens no destaque'], ['showQueue', 'Mostrar a coluna da fila (em preparo)']].map(([k, l]) => (
+              <label key={k} className="flex items-center gap-2"><input type="checkbox" checked={!!cfg[k]} onChange={(e) => save({ [k]: e.target.checked })} /> {l}</label>))}
+          </div>
+
+          <H>Chamada (som, voz e efeitos)</H>
+          <div className="mt-3 space-y-3">
+            <label className={row}><span>Som da chamada</span>
+              <select className="rounded-lg border px-3 py-2" value={cfg.sound} onChange={(e) => { save({ sound: e.target.value }); playSound(e.target.value, cfg.volume); }}>
+                {Object.entries(SOUNDS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
+            <label className={row}><span>Volume</span><input type="range" min="0.1" max="1" step="0.1" value={cfg.volume} onChange={(e) => save({ volume: Number(e.target.value) })} /></label>
+            <label className={row}><span>Destaque por</span>
+              <select className="rounded-lg border px-3 py-2" value={cfg.seconds} onChange={(e) => save({ seconds: Number(e.target.value) })}>{[6, 8, 10, 15, 20, 30].map((n) => <option key={n} value={n}>{n} segundos</option>)}</select></label>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={!!cfg.voice} onChange={(e) => save({ voice: e.target.checked })} /> Anunciar por voz</label>
+            {cfg.voice && <>
+              <label className={row}><span>Frase da voz</span><input className="rounded-lg border px-3 py-2" maxLength={120} value={cfg.voiceText} onChange={(e) => save({ voiceText: e.target.value })} /></label>
+              <p className="-mt-2 pl-[162px] text-xs text-neutral-500">A TV fala: "Comanda 12, Ana. {cfg.voiceText}"</p>
+              <label className={row}><span>Velocidade da voz</span><input type="range" min="0.6" max="1.4" step="0.05" value={cfg.voiceRate} onChange={(e) => save({ voiceRate: Number(e.target.value) })} /></label>
+            </>}
+            {[['fireworks', 'Fogos de artifício no destaque'], ['fireworksSound', 'Estouro dos fogos no som']].map(([k, l]) => (
+              <label key={k} className="flex items-center gap-2"><input type="checkbox" checked={!!cfg[k]} onChange={(e) => save({ [k]: e.target.checked })} /> {l}</label>))}
+          </div>
+          {msg && <p className="mt-4 rounded-lg bg-green-50 px-3 py-2 text-green-800">{msg}</p>}
         </div>
-        <div className="mt-5 flex justify-between gap-2">
-          <button className="rounded-lg border px-4 py-2 font-semibold" onClick={() => save(DEFAULTS)}>Restaurar padrão</button>
+        <div className="flex flex-wrap justify-between gap-2 border-t px-6 py-4">
+          <div className="flex flex-wrap gap-2">
+            <button className="rounded-lg border px-3 py-2 font-semibold" onClick={() => save(DEFAULTS)}>Restaurar original</button>
+            {company && Object.keys(company).length > 0 && <button className="rounded-lg border px-3 py-2 font-semibold" onClick={() => { onUseDefault(); setMsg('Esta TV voltou ao padrão da empresa.'); }}>Usar o padrão da empresa</button>}
+            {canDefault && <button className="rounded-lg border px-3 py-2 font-semibold" data-tv-save-default onClick={async () => { try { await onSaveDefault(); setMsg('Salvo como padrão de todas as TVs.'); } catch (e) { setMsg(e.message); } }}>Salvar como padrão das TVs</button>}
+          </div>
           <div className="flex gap-2"><button className="rounded-lg border px-4 py-2 font-semibold" onClick={onTest}>Testar chamada</button>
             <button className="rounded-lg bg-orange-600 px-4 py-2 font-semibold text-white" onClick={onClose}>Pronto</button></div>
         </div>

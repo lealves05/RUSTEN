@@ -17,8 +17,8 @@ export default {
         warn: 'rgb(var(--warn) / <alpha-value>)',
       },
       fontFamily: {
-        display: ['"Bebas Neue"', 'Impact', 'sans-serif'],
-        sans: ['"Inter"', 'system-ui', 'sans-serif'],
+        display: ['var(--font-display)'],
+        sans: ['var(--font-body)'],
         mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
       },
     },

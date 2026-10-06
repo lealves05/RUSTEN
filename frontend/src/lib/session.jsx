@@ -1,6 +1,7 @@
 // Sessão do usuário: dados de /me, permissões, tema e bloqueio da assinatura.
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { api, tokens, onAuthLost, onBlocked } from './api.js';
+import { applyBrand } from './brand.js';
 
 const Ctx = createContext(null);
 
@@ -9,6 +10,7 @@ export function applyTheme(theme) {
   try { localStorage.setItem('rusten.theme', t); } catch { /* sem armazenamento */ }
   const dark = t === 'escuro' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.classList.toggle('dark', dark);
+  applyBrand(); // a cor de destaque é ajustada para o tema (contraste)
 }
 
 export function SessionProvider({ children }) {
@@ -23,8 +25,8 @@ export function SessionProvider({ children }) {
       setMe(data);
       setBlocked(data.access?.allowed === false ? data.access : null);
       const ap = data.company?.settings?.appearance || {};
+      applyBrand(ap);
       applyTheme(localStorage.getItem('rusten.theme.user') || ap.theme);
-      document.documentElement.classList.toggle('compact', ap.density === 'compacta');
       return data;
     } catch {
       setMe(null);

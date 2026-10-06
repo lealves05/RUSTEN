@@ -7,6 +7,8 @@ import { useSession, applyTheme } from '../lib/session.jsx';
 import Subscription from './Subscription.jsx';
 import { InfinitePaySettings } from '../components/InfinitePay.jsx';
 import NoteIntegrations from '../components/NoteIntegrations.jsx';
+import { BrandSettings } from '../components/BrandSettings.jsx';
+import { DEFAULT_APPEARANCE } from '../lib/brand.js';
 import { Badge, ErrorBox, Field, Loading, Modal, PageHeader, Toggle, useLoad, useToast, useAsk } from '../components/ui.jsx';
 
 export default function Settings() {
@@ -53,19 +55,18 @@ function Company() {
   const { data, loading, error, reload } = useLoad(() => api('/api/admin/settings'));
   const [f, setF] = useState(null);
   const [err, setErr] = useState(null);
-  useEffect(() => { if (data) setF({ name: data.name, segment: data.segment, document: data.document || '', phone: data.phone || '', email: data.email || '', timezone: data.timezone, appearance: { theme: 'auto', density: 'confortavel', menu: 'lateral', ...(data.settings?.appearance || {}) } }); }, [data]);
+  useEffect(() => { if (data) setF({ name: data.name, segment: data.segment, document: data.document || '', phone: data.phone || '', email: data.email || '', timezone: data.timezone, appearance: { ...DEFAULT_APPEARANCE, ...(data.settings?.appearance || {}) } }); }, [data]);
   if (loading || !f) return <Loading />;
   if (error) return <ErrorBox error={error} onRetry={reload} />;
   const manage = s.can('configuracoes.gerenciar');
   const save = async () => {
-    try { await api('/api/admin/settings', { method: 'PUT', body: { ...f, document: f.document || null, phone: f.phone || null, email: f.email || null } }); applyTheme(f.appearance.theme); toast('Configurações salvas'); s.reload(); }
+    try { await api('/api/admin/settings', { method: 'PUT', body: { ...f, document: f.document || null, phone: f.phone || null, email: f.email || null } }); applyTheme(f.appearance.theme); toast('Configurações salvas'); await s.reload(); }
     catch (e) { setErr(e); }
   };
   const removeDemo = async () => {
     if (!await ask.confirm({ title: 'Remover demonstração', message: 'Remover o cardápio de demonstração? Produtos já vendidos serão apenas desativados.', confirmLabel: 'Remover', danger: true })) return;
     try { const r = await api('/api/menu/demo', { method: 'DELETE' }); toast(`${r.removed} removidos, ${r.deactivated} desativados`); } catch (e) { setErr(e); }
   };
-  const ap = (k, v) => setF({ ...f, appearance: { ...f.appearance, [k]: v } });
   return (
     <div className="card space-y-4 p-5">
       <div className="grid gap-3 sm:grid-cols-2">
@@ -76,15 +77,10 @@ function Company() {
         <Field label="Fuso horário"><select className="input" disabled={!manage} value={f.timezone} onChange={(e) => setF({ ...f, timezone: e.target.value })}>
           {['America/Sao_Paulo', 'America/Manaus', 'America/Cuiaba', 'America/Belem', 'America/Fortaleza', 'America/Recife', 'America/Bahia', 'America/Porto_Velho', 'America/Rio_Branco', 'America/Noronha'].map((z) => <option key={z}>{z}</option>)}</select></Field>
       </div>
-      <h3 className="font-display text-2xl">Aparência</h3>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Field label="Tema"><select className="input" value={f.appearance.theme} onChange={(e) => { ap('theme', e.target.value); applyTheme(e.target.value); }}><option value="auto">Automático</option><option value="claro">Claro</option><option value="escuro">Escuro</option></select></Field>
-        <Field label="Densidade"><select className="input" value={f.appearance.density} onChange={(e) => ap('density', e.target.value)}><option value="confortavel">Confortável</option><option value="compacta">Compacta</option></select></Field>
-        <Field label="Menu"><select className="input" value={f.appearance.menu} onChange={(e) => ap('menu', e.target.value)}><option value="lateral">Lateral</option><option value="superior">Superior</option></select></Field>
-      </div>
+      <BrandSettings value={f.appearance} onChange={(a) => setF({ ...f, appearance: a })} manage={manage} companyName={f.name} onError={setErr} />
       <ErrorBox error={err} />
-      <div className="flex flex-wrap gap-2">
-        {manage && <button className="btn-primary" onClick={save}>Salvar</button>}
+      <div className="sticky bottom-0 -mx-5 -mb-5 flex flex-wrap gap-2 rounded-b-xl border-t border-line bg-surface/95 p-4 backdrop-blur">
+        {manage && <button className="btn-primary" onClick={save} data-settings-save>Salvar</button>}
         {manage && <button className="btn-ghost" onClick={removeDemo}>Remover dados de demonstração</button>}
       </div>
     </div>

@@ -1332,6 +1332,29 @@ await check('cardápio: planilha com categoria nova pede indicação (usar exist
   assert.equal(ex.status, 200); const row = ex.data.find((x) => x.sku === '9372');
   assert.equal(row.category, 'CERVEJAS TESTE'); assert.equal(row.codes, '7890000000017'); assert.equal(row.price_cents, 1399);
 });
+await check('marca: logotipo e fundos (só imagem válida), aparência e padrão da TV', async () => {
+  const png = 'data:image/png;base64,' + Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a9f00000000049454e44ae426082', 'hex').toString('base64');
+  assert.equal((await apiC('PUT', '/api/brand/logo', { data_url: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=' })).status, 400);
+  assert.equal((await apiC('PUT', '/api/brand/logo', { data_url: 'data:image/png;base64,' + Buffer.from('nao e png').toString('base64') })).status, 400);
+  assert.equal((await apiC('PUT', '/api/brand/qualquer', { data_url: png })).status, 404);
+  const r = await apiC('PUT', '/api/brand/logo', { data_url: png });
+  assert.equal(r.status, 200, JSON.stringify(r.data)); assert.ok(r.data.logo_v);
+  assert.equal((await apiC('GET', '/api/brand/logo')).data.data_url, png);
+  const me = (await apiC('GET', '/api/auth/me')).data; assert.ok(me.brand.logo_v);
+  assert.equal((await api('GET', '/api/brand/logo')).data?.data_url ?? null, null); // outra empresa não vê
+  const big = 'data:image/jpeg;base64,' + Buffer.concat([Buffer.from('ffd8ffe0', 'hex'), Buffer.alloc(1700 * 1024)]).toString('base64');
+  assert.equal((await apiC('PUT', '/api/brand/fundo', { data_url: big })).status, 400); // passa do limite, mas o corpo grande é aceito
+  const s0 = (await apiC('GET', '/api/admin/settings')).data;
+  const ap = { ...(s0.settings?.appearance || {}), accent: '#2f7fd1', font_display: 'oswald', radius: 'arredondado', sidebar: 'cor', logo_mode: 'logo_nome', brand_title: 'Bar do Teste', bg_overlay: 0.8 };
+  assert.equal((await apiC('PUT', '/api/admin/settings', { appearance: ap })).status, 200);
+  assert.equal((await apiC('PUT', '/api/admin/settings', { appearance: { ...ap, font_display: 'comic' } })).status, 400);
+  assert.equal((await apiC('GET', '/api/auth/me')).data.company.settings.appearance.sidebar, 'cor');
+  assert.equal((await apiC('PUT', '/api/brand/tv', { title: 'Retirada', scale: 1.2, ticker: 'Happy hour', cardStyle: 'vidro' })).status, 200);
+  assert.equal((await apiC('PUT', '/api/brand/tv', { title: 'x', hack: 1 })).status, 400);
+  assert.equal((await apiC('GET', '/api/brand/tv')).data.ticker, 'Happy hour');
+  assert.equal((await apiC('DELETE', '/api/brand/logo')).status, 200);
+  assert.equal((await apiC('GET', '/api/brand/logo')).data.data_url, null);
+});
 await check('clientes: importar planilha marca repetidos/já cadastrados e grava só as linhas escolhidas', async () => {
   const rows = [
     { _line: 2, nome: 'Ana Importada', cpf: '714.602.380-01', telefone: '(11) 98888-0001' },

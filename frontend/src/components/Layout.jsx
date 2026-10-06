@@ -7,7 +7,8 @@ import {
 } from 'lucide-react';
 import { useSession } from '../lib/session.jsx';
 import { api, terminal } from '../lib/api.js';
-import { Badge, Logo, Modal, useToast } from './ui.jsx';
+import { Badge, Modal, useToast } from './ui.jsx';
+import { BrandLogo, BrandBackground } from './Brand.jsx';
 import { beep } from '../pdv/useScanner.js';
 import { DemoBar } from './Activate.jsx';
 import { lessonFor } from '../lib/training.js';
@@ -143,10 +144,11 @@ export default function Layout() {
 
   return (
     <div className="flex min-h-screen">
+      <BrandBackground />
       {!topMenu && (
-        <aside className={`no-print sticky top-0 hidden h-screen shrink-0 flex-col border-r border-line bg-surface p-3 md:flex ${collapsed ? 'w-[68px]' : 'w-60'}`}>
+        <aside className={`app-side no-print sticky top-0 hidden h-screen shrink-0 flex-col border-r border-line bg-surface p-3 md:flex ${collapsed ? 'w-[68px]' : 'w-60'}`}>
           <div className="mb-4 flex items-center justify-between px-1">
-            <Logo size={34} withText={!collapsed} />
+            <BrandLogo compact={collapsed} />
           </div>
           <nav className="flex flex-1 flex-col gap-1 overflow-y-auto" aria-label="Menu principal">{links(collapsed)}</nav>
           <button className="btn-ghost mt-2 justify-start px-3 text-xs" onClick={toggle} aria-label={collapsed ? 'Expandir menu' : 'Recolher menu'}>
@@ -158,7 +160,7 @@ export default function Layout() {
       {mobile && (
         <div className="fixed inset-0 z-40 bg-black/60 md:hidden" onClick={() => setMobile(false)}>
           <aside className="h-full w-72 overflow-y-auto bg-surface p-3" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-4 flex items-center justify-between"><Logo size={32} /><button onClick={() => setMobile(false)} aria-label="Fechar menu"><X /></button></div>
+            <div className="mb-4 flex items-center justify-between"><BrandLogo /><button onClick={() => setMobile(false)} aria-label="Fechar menu"><X /></button></div>
             <nav className="flex flex-col gap-1">{links(false)}</nav>
             <div className="mt-4 border-t border-line pt-3 text-sm">
               <div className="font-semibold">{s.me?.user?.name}</div><div className="text-xs text-muted">{s.me?.user?.roleName}{unit?.name ? ` · ${unit.name}` : ''}</div>
@@ -172,7 +174,7 @@ export default function Layout() {
         <header className="no-print sticky top-0 z-30 border-b border-line bg-surface/95 backdrop-blur">
           <div className="flex items-center gap-2 px-3 py-2 sm:px-4">
             <button className={`flex h-11 w-11 items-center justify-center rounded hover:bg-raised ${topMenu ? '' : 'md:hidden'}`} onClick={() => setMobile(true)} aria-label="Abrir menu"><Menu size={20} /></button>
-            {topMenu && <div className="hidden md:block"><Logo size={30} withText={false} /></div>}
+            {topMenu && <div className="hidden md:block"><BrandLogo compact /></div>}
             <button onClick={() => setSearchOpen(true)} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-line bg-bg px-3 py-2 text-left text-sm text-muted hover:border-copper sm:max-w-md">
               <Search size={16} /> <span className="truncate">Buscar comanda, mesa, produto…</span>
               <kbd className="ml-auto hidden rounded border border-line px-1.5 text-[10px] sm:inline">Ctrl K</kbd>

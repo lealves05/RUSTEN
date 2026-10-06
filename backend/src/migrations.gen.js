@@ -47,5 +47,9 @@ export const MIGRATIONS = [
  {
   "name": "012_foto_produto.sql",
   "sql": "-- RUSTEN — 012: foto opcional do produto (cardápio digital). Só adiciona colunas; produtos existentes ficam sem foto.\n-- A imagem fica no próprio banco (data URL já reduzida no navegador, até ~300 KB) e é servida por /api/public/:slug/foto/:id.\n-- Rollback: migrations/rollback/012_foto_produto.down.sql\nalter table products add column if not exists photo text;\nalter table products add column if not exists photo_updated_at timestamptz;\n"
+ },
+ {
+  "name": "013_marca.sql",
+  "sql": "-- RUSTEN — 013: marca do estabelecimento (logotipo e imagens de fundo do sistema e da TV).\n-- Imagens reduzidas no navegador e guardadas como data URL (PNG/JPEG/WebP; nunca SVG). Uma por tipo e empresa.\n-- Rollback: migrations/rollback/013_marca.down.sql\ncreate table if not exists company_assets (\n  company_id  bigint not null references companies(id) on delete cascade,\n  kind        text not null check (kind in ('logo', 'fundo', 'tv_fundo')),\n  data_url    text not null,\n  bytes       int not null,\n  updated_at  timestamptz not null default now(),\n  primary key (company_id, kind)\n);\n"
  }
 ];

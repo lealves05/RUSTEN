@@ -3,21 +3,30 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import ReviewLinkModal from '../components/ReviewLink.jsx';
 import {
-  ArrowRightLeft, Ban, ChefHat, Gift, Hand, Keyboard, Minus, Pause, Play, Plus, Printer, Receipt, ScanBarcode, Star, Store, Timer, UserRound, X,
+  ArrowRightLeft, Ban, ChefHat, ChevronDown, Gift, Hand, Keyboard, Minus, MoreHorizontal, NotebookPen, Pause, Play, Plus, Printer, Receipt, ScanBarcode, Star, Store, Timer, UserRound, X,
 } from 'lucide-react';
 import CustomerPicker from '../components/CustomerPicker.jsx';
 import { api, newKey } from '../lib/api.js';
 import { money, qtyFmt, bp, time } from '../lib/format.js';
 import { useSession } from '../lib/session.jsx';
-import { Badge, Empty, ErrorBox, Field, Loading, Modal, useToast } from '../components/ui.jsx';
+import { Badge, Empty, ErrorBox, Field, Loading, Modal, useAsk, useToast } from '../components/ui.jsx';
 import { useScanner, beep } from './useScanner.js';
+import { reviewAuto } from '../lib/prefs.js';
 import { CancelItemModal, ExceptionModal, OptionsModal, PaymentModal, TransferModal, printPrecheck, sessionLabel, ManagerAuth } from './modals.jsx';
 
 const MODE_LABEL = { manual: 'Manual', continua: 'Leitura contínua', dupla: 'Dupla leitura' };
+// Explicação em linguagem simples de cada modo do leitor de código de barras
+const MODE_HINT = {
+  manual: 'Toque nos produtos na tela. O leitor é opcional.',
+  continua: 'Leia a comanda uma vez e depois vários produtos seguidos.',
+  dupla: 'Para cada item: leia a comanda e em seguida o produto (mais seguro contra erro de comanda).',
+};
+
 
 export default function Pdv() {
   const s = useSession();
   const toast = useToast();
+  const ask = useAsk();
   const st = s.me.pdv;
   const [params, setParams] = useSearchParams();
   const [mode, setMode] = useState(st.double_read_mandatory ? 'dupla' : st.mode);
@@ -31,6 +40,8 @@ export default function Pdv() {
   const [qtyNext, setQtyNext] = useState(1);
   const [loadErr, setLoadErr] = useState(null);
   const [reviewFor, setReviewFor] = useState(null);
+  const [pane, setPane] = useState(() => (Number(params.get('sessao')) ? 'produtos' : 'conta')); // celular/tablet: Produtos | Conta
+  const [obsNext, setObsNext] = useState(false); // próximo toque no produto abre observação
   const navigate = useNavigate();
 
   // Motor de leitura
@@ -70,7 +81,7 @@ export default function Pdv() {
     const t = setInterval(loadSessions, 20000);
     return () => clearInterval(t);
   }, [loadSessions]);
-  useEffect(() => { loadActive(activeId); if (activeId) setParams({ sessao: String(activeId) }, { replace: true }); }, [activeId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadActive(activeId); if (activeId) setParams({ sessao: String(activeId) }, { replace: true }); setPane(activeId ? 'produtos' : 'conta'); }, [activeId]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setPhase(mode === 'dupla' ? 'await_card' : 'idle'); setPair(null); setDeadline(null); }, [mode]);
 
   // ---- Temporizador da dupla leitura ----
@@ -223,7 +234,8 @@ export default function Pdv() {
   useScanner(onScan, { enabled: st.scanner_enabled, terminator: st.terminator });
 
   // ---- Lançamento pelo catálogo ----
-  const pickProduct = (p) => {
+  const pickProduct = (p, longPress = false) => {
+    const withNotes = longPress || obsNext;
     if (phase === 'sending' || phase === 'uncertain') return say('warn', 'Aguarde/resolva o lançamento pendente.');
     if (!activeId) return say('warn', 'Escolha o destino: selecione um consumo, abra uma comanda ou inicie uma venda de balcão.');
     if (!st.allow_manual && !st.double_read_mandatory) return say('bad', 'Lançamento manual desabilitado.');
@@ -233,10 +245,21 @@ export default function Pdv() {
     }
     if (!s.can('pdv.lancamento_manual')) return say('bad', 'Sem permissão para lançamento manual.');
     const body = { session_id: activeId, product_id: p.id, launch_mode: 'manual', qty: p.kind === 'weight' ? undefined : qtyNext, idempotency_key: newKey() };
-    if (needsOptions(p)) return setOptionsFor({ product: p, destination: destOf(activeId), body, askQty: true });
+    if (needsOptions(p) || withNotes) { setObsNext(false); return setOptionsFor({ product: p, destination: destOf(activeId), body, askQty: true }); }
     setQtyNext(1);
     return send(body);
   };
+  // "+" num item já lançado: lança mais um igual (mesmas opções e observação), no mesmo destino
+  const relaunch = (it) => {
+    if (phase === 'sending' || phase === 'uncertain') return say('warn', 'Aguarde/resolva o lançamento pendente.');
+    if (!st.allow_manual || st.double_read_mandatory || !s.can('pdv.lancamento_manual')) return say('bad', 'Lançamento manual desabilitado: leia a comanda e o produto.');
+    return send({ session_id: active.id, product_id: it.product_id, launch_mode: 'manual', qty: 1, option_ids: (it.modifiers || []).map((m) => m.id).filter(Boolean),
+      notes: it.notes || undefined, idempotency_key: newKey() });
+  };
+  // toque longo no produto = lançar com observação
+  const press = useRef({ t: null, long: false });
+  const pressStart = (p) => { press.current.long = false; clearTimeout(press.current.t); press.current.t = setTimeout(() => { press.current.long = true; pickProduct(p, true); }, 550); };
+  const pressEnd = () => clearTimeout(press.current.t);
 
   const onException = ({ reason, authorization }) => {
     const { product, destination } = exceptionFor;
@@ -280,36 +303,43 @@ export default function Pdv() {
   if (loadErr) return <ErrorBox error={loadErr} onRetry={() => window.location.reload()} />;
   if (!products) return <Loading label="Preparando o PDV…" />;
 
+  const scannerMode = mode !== 'manual';
+  const activeCount = active ? active.items.filter((i) => i.status === 'ativo').length : 0;
+  const cancelSession = async () => {
+    const reason = await ask.reason({ title: `Cancelar ${sessionLabel(active)}`, danger: true, confirmLabel: 'Cancelar consumo',
+      message: 'Todos os itens saem da conta. Fica registrado na auditoria.', reasons: ['Aberto por engano', 'Mesa/comanda errada', 'Cliente foi embora sem consumir', 'Teste'] });
+    if (!reason) return;
+    try { await api(`/api/pdv/sessions/${active.id}/cancel`, { method: 'POST', body: { reason } }); setActiveId(null); loadSessions(); toast('Consumo cancelado'); } catch (e) { say('bad', e.message); }
+  };
+
   return (
-    <div className="-m-3 flex min-h-[calc(100vh-57px)] flex-col sm:-m-5">
-      {/* Barra de estado do motor de leitura */}
-      <div className={`border-b border-line px-3 py-3 sm:px-5 ${phase === 'await_product' ? 'bg-copper/15' : phase === 'uncertain' ? 'bg-rust/15' : 'bg-surface'}`}>
-        <div className="flex flex-wrap items-center gap-3">
-          <div role="group" aria-label="Modo de operação" className="flex overflow-hidden rounded-lg border border-line">
-            {['manual', 'continua', 'dupla'].map((m) => (
-              <button key={m} onClick={() => changeMode(m)} disabled={!canSwitch && m !== mode} aria-pressed={mode === m}
-                className={`px-3 py-2 text-sm font-semibold ${mode === m ? 'bg-copper text-white dark:text-black' : 'bg-surface hover:bg-raised'} disabled:opacity-40`}>
-                {MODE_LABEL[m]}
-              </button>
-            ))}
-          </div>
-          {st.double_read_mandatory && <Badge tone="warn">Dupla leitura obrigatória</Badge>}
-          <div className="flex min-w-[220px] flex-1 items-center gap-2" aria-live="assertive">
-            <ScanBarcode className={phase === 'await_product' ? 'text-copper' : 'text-muted'} />
-            <span className="font-display text-2xl tracking-wide sm:text-3xl">{statusText}</span>
-            {remaining != null && <Badge tone="warn" icon={Timer}>{remaining}s</Badge>}
-            {phase === 'await_product' && <button className="btn-ghost py-1 text-xs" onClick={() => cancelPair('Par cancelado. Nenhum item foi lançado.')}><X size={14} /> Cancelar par (Esc)</button>}
-          </div>
-          <label className="flex items-center gap-2">
+    <div className="-m-3 flex min-h-[calc(100vh-57px)] flex-col pb-36 sm:-m-5 lg:pb-0">
+      {/* Barra do leitor: compacta no modo manual; destaque grande só quando o leitor está em uso */}
+      <div className={`border-b border-line px-3 py-2 sm:px-5 ${phase === 'await_product' ? 'bg-copper/15' : phase === 'uncertain' ? 'bg-rust/15' : 'bg-surface'}`}>
+        <div className="flex flex-wrap items-center gap-2">
+          {scannerMode ? (
+            <div className="flex min-w-[220px] flex-1 items-center gap-2" aria-live="assertive">
+              <ScanBarcode className={phase === 'await_product' ? 'text-copper' : 'text-muted'} />
+              <span className="font-display text-2xl tracking-wide sm:text-3xl">{statusText}</span>
+              {remaining != null && <Badge tone="warn" icon={Timer}>{remaining}s</Badge>}
+              {phase === 'await_product' && <button className="btn-ghost text-xs" onClick={() => cancelPair('Par cancelado. Nenhum item foi lançado.')}><X size={14} /> Cancelar par (Esc)</button>}
+            </div>
+          ) : (
+            <div className="hidden min-w-0 flex-1 text-sm text-muted sm:block">
+              {active ? <>Lançando em <b className="text-ink">{sessionLabel(active)}</b> — toque nos produtos. Segure o produto para lançar com observação.</> : 'Escolha a mesa ou comanda e toque nos produtos.'}
+            </div>
+          )}
+          <label className={`${scannerMode ? 'flex' : 'hidden sm:flex'} items-center gap-2`}>
             <Keyboard size={18} className="text-muted" aria-hidden />
-            <input ref={scanRef} data-scan-input className="input w-56 font-mono" placeholder="Digite ou leia o código + Enter" onKeyDown={typed} aria-label="Código da comanda, mesa ou produto" autoComplete="off" />
+            <input ref={scanRef} data-scan-input className="input w-48 font-mono sm:w-60" placeholder="Código + Enter" title="Digite ou leia o código da comanda, mesa ou produto e tecle Enter" onKeyDown={typed} aria-label="Código da comanda, mesa ou produto" autoComplete="off" />
           </label>
+          <ModePicker mode={mode} canSwitch={canSwitch} mandatory={st.double_read_mandatory} onPick={changeMode} />
         </div>
         {banner && (
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-sm" role="status">
+          <div className="mt-2 hidden flex-wrap items-center gap-2 text-sm lg:flex" role="status">
             <Badge tone={banner.tone}>{banner.tone === 'ok' ? 'OK' : banner.tone === 'warn' ? 'Atenção' : banner.tone === 'info' ? 'Leitura' : 'Não lançado'}</Badge>
             <span className="font-medium">{banner.text}</span>
-            {banner.action && <button className="btn-ghost py-1 text-xs" onClick={() => { const a = banner.action; setBanner(null); a.run(); }}>{banner.action.label}</button>}
+            {banner.action && <button className="btn-ghost text-xs" onClick={() => { const a = banner.action; setBanner(null); a.run(); }}>{banner.action.label}</button>}
           </div>
         )}
         {phase === 'uncertain' && pending && (
@@ -317,36 +347,55 @@ export default function Pdv() {
         )}
       </div>
 
+      {/* Celular e tablet: alterna entre Produtos e Conta */}
+      <div className="sticky top-[57px] z-20 flex border-b border-line bg-surface lg:hidden" role="tablist" aria-label="Seções do PDV">
+        {[['produtos', 'Produtos'], ['conta', active ? `Conta · ${activeCount} ${activeCount === 1 ? 'item' : 'itens'}` : 'Mesas e comandas']].map(([k, l]) => (
+          <button key={k} role="tab" aria-selected={pane === k} onClick={() => setPane(k)} data-pane={k}
+            className={`min-h-[48px] flex-1 border-b-2 px-3 text-sm font-semibold ${pane === k ? 'border-copper text-ink' : 'border-transparent text-muted'}`}>{l}</button>
+        ))}
+      </div>
+
       <div className="grid flex-1 gap-0 lg:grid-cols-[400px_1fr]">
         {/* Consumo ativo */}
-        <section className="border-b border-line bg-surface lg:border-b-0 lg:border-r">
-          <SessionsStrip sessions={sessions} activeId={activeId} onPick={(id) => { if (mode === 'dupla' && phase === 'await_product') cancelPair('Par cancelado: destino trocado manualmente.'); setActiveId(id); }}
+        <section className={`${pane === 'conta' ? '' : 'hidden'} border-b border-line bg-surface lg:block lg:border-b-0 lg:border-r`}>
+          <SessionsStrip sessions={sessions} activeId={activeId} onPick={(id) => { if (mode === 'dupla' && phase === 'await_product') cancelPair('Par cancelado: destino trocado manualmente.'); setActiveId(id); setPane('produtos'); }}
             onOpen={() => setModal('open')} onCounter={async () => { try { const r = await api('/api/pdv/sessions', { method: 'POST', body: { kind: 'balcao' } }); setActiveId(r.id); loadSessions(); } catch (e) { say('bad', e.message); } }} canOpen={s.can('pdv.abrir_comanda')} />
           <ActivePanel session={active} last={last} tz={s.tz}
             onPay={() => setModal('pay')} onPrint={() => printPrecheck(active, s.me.company.name, s.tz) || toast('Permita pop-ups para imprimir', 'warn')}
             onCancelItem={(it) => { setCancelItem(it); setModal('cancel'); }} onTransfer={() => setModal('transfer')} onFee={() => setModal('fee')}
+            onRelaunch={relaunch} canRelaunch={st.allow_manual && !st.double_read_mandatory && s.can('pdv.lancamento_manual') && phase !== 'sending'}
             onRequestClose={async () => { try { await api(`/api/pdv/sessions/${active.id}/${active.status === 'aberta' ? 'request-close' : 'resume'}`, { method: 'POST' }); loadActive(); loadSessions(); } catch (e) { say('bad', e.message); } }}
-            onCancelSession={async () => { const reason = prompt('Motivo do cancelamento do consumo:'); if (!reason) return; try { await api(`/api/pdv/sessions/${active.id}/cancel`, { method: 'POST', body: { reason } }); setActiveId(null); loadSessions(); } catch (e) { say('bad', e.message); } }}
-            onSuspend={async () => { await api(`/api/pdv/sessions/${active.id}/suspend`, { method: 'POST', body: { suspended: !active.suspended } }).catch(() => {}); loadActive(); loadSessions(); }}
+            onCancelSession={cancelSession}
+            onSuspend={async () => { await api(`/api/pdv/sessions/${active.id}/suspend`, { method: 'POST', body: { suspended: !active.suspended } }).catch((e) => say('bad', e.message)); loadActive(); loadSessions(); }}
             onCustomer={() => setModal('customer')} onRedeem={() => setModal('redeem')}
             onSend={async () => { try { const r = await api(`/api/pdv/sessions/${active.id}/send`, { method: 'POST' }); toast(`${r.sent} item(ns) enviado(s) à produção`); loadActive(); } catch (e) { say('bad', e.message); } }}
             can={s.can} />
         </section>
 
         {/* Catálogo */}
-        <section className="min-w-0 p-3 sm:p-4">
+        <section className={`${pane === 'produtos' ? '' : 'hidden'} min-w-0 p-3 sm:p-4 lg:block`}>
+          {!active && (
+            <button className="mb-3 flex w-full items-center justify-between rounded-xl border-2 border-dashed border-copper/60 bg-copper/5 p-3 text-left lg:hidden" onClick={() => setPane('conta')}>
+              <span><b>Escolha o destino</b><span className="block text-sm text-muted">Mesa, comanda ou balcão antes de lançar.</span></span><ChevronDown className="-rotate-90 text-copper" />
+            </button>
+          )}
           <div className="flex flex-wrap items-center gap-2">
-            <input className="input max-w-xs" placeholder="Buscar produto, SKU ou código" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Buscar produto" />
-            <div className="flex items-center gap-1 rounded-lg border border-line bg-surface p-1" title="Quantidade do próximo lançamento manual">
-              <button className="rounded p-2 hover:bg-raised" onClick={() => setQtyNext((q) => Math.max(1, q - 1))} aria-label="Diminuir quantidade"><Minus size={16} /></button>
-              <span className="w-10 text-center font-display text-2xl">{qtyNext}×</span>
-              <button className="rounded p-2 hover:bg-raised" onClick={() => setQtyNext((q) => Math.min(99, q + 1))} aria-label="Aumentar quantidade"><Plus size={16} /></button>
+            <input className="input min-w-[12rem] flex-1 sm:max-w-xs" placeholder="Buscar produto, SKU ou código" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Buscar produto" />
+            <div className="flex items-center gap-1 rounded-lg border border-line bg-surface p-1" title="Quantidade do próximo lançamento">
+              <button className="tap flex items-center justify-center rounded hover:bg-raised" onClick={() => setQtyNext((q) => Math.max(1, q - 1))} aria-label="Diminuir quantidade"><Minus size={16} /></button>
+              <span className="w-10 text-center font-display text-2xl" aria-live="polite">{qtyNext}×</span>
+              <button className="tap flex items-center justify-center rounded hover:bg-raised" onClick={() => setQtyNext((q) => Math.min(99, q + 1))} aria-label="Aumentar quantidade"><Plus size={16} /></button>
             </div>
+            <button className={`btn ${obsNext ? 'bg-copper text-white dark:text-black' : 'border border-line bg-surface hover:bg-raised'}`} aria-pressed={obsNext} onClick={() => setObsNext((v) => !v)} data-obs-next
+              title="O próximo produto tocado abre a observação (ex.: sem gelo, bem passado). Também dá para segurar o produto.">
+              <NotebookPen size={16} /> Obs.
+            </button>
             {st.double_read_mandatory && <span className="text-xs text-muted"><Hand size={12} className="inline" /> Clique no produto = exceção autorizada</span>}
           </div>
+          {obsNext && <p className="mt-2 text-sm font-semibold text-copper">Toque no produto para escrever a observação (vai para o preparo).</p>}
           <div className="mt-3 flex gap-1 overflow-x-auto pb-1">
             {[['fav', 'Favoritos'], ['all', 'Todos'], ...cats.map((c) => [String(c.id), c.name])].map(([k, l]) => (
-              <button key={k} onClick={() => { setCat(k); setSearch(''); }} className={`whitespace-nowrap rounded-full border px-3 py-1.5 text-sm font-semibold ${cat === k && !search ? 'border-copper bg-copper text-white dark:text-black' : 'border-line bg-surface hover:bg-raised'}`}>{k === 'fav' && <Star size={12} className="mr-1 inline" />}{l}</button>
+              <button key={k} onClick={() => { setCat(k); setSearch(''); }} className={`min-h-[44px] whitespace-nowrap rounded-full border px-4 text-sm font-semibold ${cat === k && !search ? 'border-copper bg-copper text-white dark:text-black' : 'border-line bg-surface hover:bg-raised'}`}>{k === 'fav' && <Star size={12} className="mr-1 inline" />}{l}</button>
             ))}
           </div>
           {!filtered.length ? (
@@ -354,18 +403,38 @@ export default function Pdv() {
           ) : (
             <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
               {filtered.map((p) => (
-                <button key={p.id} onClick={() => pickProduct(p)} disabled={phase === 'sending'}
-                  className="group flex min-h-[84px] flex-col justify-between rounded-xl border border-line bg-surface p-3 text-left transition hover:border-copper hover:shadow-md focus-visible:ring-4 focus-visible:ring-copper/40 disabled:opacity-50">
+                <button key={p.id} disabled={phase === 'sending'} data-product={p.name}
+                  onClick={() => { if (press.current.long) { press.current.long = false; return; } pickProduct(p); }}
+                  onPointerDown={() => pressStart(p)} onPointerUp={pressEnd} onPointerLeave={pressEnd} onPointerCancel={pressEnd} onContextMenu={(e) => e.preventDefault()}
+                  className="group flex min-h-[84px] select-none flex-col justify-between rounded-xl border border-line bg-surface p-3 text-left transition hover:border-copper hover:shadow-md focus-visible:ring-4 focus-visible:ring-copper/40 active:scale-[.98] disabled:opacity-50">
                   <span className="line-clamp-2 font-semibold leading-tight">{p.name}</span>
                   <span className="mt-1 flex items-center justify-between text-sm">
                     <span className="font-display text-xl text-copper">{money(p.price_cents)}{p.kind === 'weight' ? `/${p.unit}` : ''}</span>
-                    {(p.groups?.length > 0) && <span className="text-[10px] uppercase text-muted">opções</span>}
+                    {(p.groups?.length > 0) && <span className="text-[11px] uppercase text-muted">opções</span>}
                   </span>
                 </button>
               ))}
             </div>
           )}
         </section>
+      </div>
+
+      {/* Celular e tablet: barra fixa com retorno do último lançamento, saldo e Receber */}
+      <div className="fixed inset-x-0 bottom-16 z-30 border-t border-line bg-surface/95 px-3 py-2 shadow-[0_-4px_12px_rgba(0,0,0,.08)] backdrop-blur md:bottom-0 lg:hidden" data-pdv-bar>
+        {banner && (
+          <div className={`mb-1 flex items-center gap-2 text-sm ${banner.tone === 'ok' ? 'text-ok' : banner.tone === 'info' ? 'text-copper' : banner.tone === 'warn' ? 'text-warn' : 'text-rust'}`} role="status" data-pdv-feedback>
+            <span className="line-clamp-2 flex-1 font-semibold">{banner.text}</span>
+            {banner.action && <button className="btn-ghost text-xs" onClick={() => { const a = banner.action; setBanner(null); a.run(); }}>{banner.action.label}</button>}
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <button className="min-h-[48px] min-w-0 flex-1 text-left" onClick={() => setPane(pane === 'conta' ? 'produtos' : 'conta')}>
+            <span className="block truncate text-xs text-muted">{active ? sessionLabel(active) : 'Nenhum destino'}</span>
+            <span className="font-display text-2xl leading-none">{active ? money(active.totals.balance) : '—'}</span>
+          </button>
+          {active && s.can('pdv.receber') && <button className="btn-primary min-h-[48px] px-6" onClick={() => setModal('pay')} data-pdv-bar-pay><Receipt size={18} /> Receber</button>}
+          {!active && <button className="btn-primary min-h-[48px]" onClick={() => setPane('conta')}>Escolher destino</button>}
+        </div>
       </div>
 
       <OptionsModal open={!!optionsFor} product={optionsFor?.product} destination={optionsFor?.destination} askQty={optionsFor?.askQty}
@@ -382,11 +451,17 @@ export default function Pdv() {
       <PaymentModal open={modal === 'pay'} session={active} onClose={() => setModal(null)}
         onChanged={async (closed) => {
           if (closed) {
-            const done = active; setActiveId(null); setActive(null); toast('Consumo encerrado');
-            const review = s.hasModule('marketing') ? `&avaliar=${done?.id}` : '';
-            // mesa ou comanda encerrada: volta para o salão (com o QR de avaliação, se houver)
-            if (done && ['mesa', 'comanda'].includes(done.kind) && s.can('salao.visualizar')) { navigate(`/salao?aba=${done.kind === 'mesa' ? 'mesas' : 'comandas'}${review}`); return; }
-            if (s.hasModule('marketing')) setReviewFor(done?.id);
+            const done = active; setActiveId(null); setActive(null);
+            // QR de avaliação: automático só se este aparelho quiser; senão fica a um toque no aviso
+            const wantReview = s.hasModule('marketing') && done;
+            const auto = wantReview && reviewAuto.get();
+            const toFloor = done && ['mesa', 'comanda'].includes(done.kind) && s.can('salao.visualizar');
+            const aba = done?.kind === 'mesa' ? 'mesas' : 'comandas';
+            toast(`Conta encerrada${done ? ` — ${sessionLabel(done)}` : ''}`, 'ok', wantReview && !auto
+              ? { action: { label: 'Mostrar QR de avaliação', run: () => (toFloor ? navigate(`/salao?aba=${aba}&avaliar=${done.id}`) : setReviewFor(done.id)) } } : undefined);
+            // mesa ou comanda encerrada: volta para o salão (com o QR de avaliação, se automático)
+            if (toFloor) { navigate(`/salao?aba=${aba}${auto ? `&avaliar=${done.id}` : ''}`); return; }
+            if (auto) setReviewFor(done.id);
           } else await loadActive();
           loadSessions();
         }} />
@@ -401,18 +476,45 @@ export default function Pdv() {
   );
 }
 
+// Modo do leitor de código: escondido atrás de um botão (quem não usa leitor não precisa ver)
+function ModePicker({ mode, canSwitch, mandatory, onPick }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button className="btn-ghost text-sm" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="true" data-mode-picker
+        title="Como o PDV usa o leitor de código de barras">
+        <ScanBarcode size={16} /> <span className="hidden sm:inline">Leitor:</span> {MODE_LABEL[mode]} <ChevronDown size={14} />
+      </button>
+      {open && (
+        <div className="absolute right-0 z-40 mt-1 w-80 max-w-[calc(100vw-24px)] rounded-xl border border-line bg-surface p-2 shadow-xl" role="menu">
+          {mandatory && <p className="mb-2 rounded bg-warn/10 p-2 text-xs text-warn">Dupla leitura obrigatória nesta empresa (Configurações › PDV).</p>}
+          {['manual', 'continua', 'dupla'].map((m) => (
+            <button key={m} role="menuitemradio" aria-checked={mode === m} disabled={!canSwitch && m !== mode}
+              onClick={() => { setOpen(false); onPick(m); }}
+              className={`mb-1 block min-h-[48px] w-full rounded-lg border p-2 text-left disabled:opacity-50 ${mode === m ? 'border-copper bg-copper/10' : 'border-transparent hover:bg-raised'}`}>
+              <span className="font-semibold">{MODE_LABEL[m]}</span>
+              <span className="block text-xs text-muted">{MODE_HINT[m]}</span>
+            </button>
+          ))}
+          {!canSwitch && <p className="px-1 text-xs text-muted">Seu perfil ou a configuração não permite trocar o modo.</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SessionsStrip({ sessions, activeId, onPick, onOpen, onCounter, canOpen }) {
   return (
     <div className="border-b border-line p-3">
       <div className="flex gap-2">
         {canOpen && <button className="btn-primary flex-1" onClick={onOpen}><Plus size={16} /> Abrir comanda/mesa</button>}
-        {canOpen && <button className="btn-ghost" onClick={onCounter} title="Venda rápida de balcão"><Store size={16} /> Balcão</button>}
+        {canOpen && <button className="btn-ghost" onClick={onCounter} title="Venda rápida no balcão, sem mesa nem comanda"><Store size={16} /> Balcão</button>}
       </div>
-      <div className="mt-2 flex max-h-28 flex-wrap gap-1 overflow-y-auto" aria-label="Consumos abertos">
-        {!sessions.length && <span className="text-sm text-muted">Nenhum consumo aberto.</span>}
+      <div className="mt-2 flex max-h-40 flex-wrap gap-1.5 overflow-y-auto" aria-label="Consumos abertos">
+        {!sessions.length && <span className="text-sm text-muted">Nenhuma mesa ou comanda aberta.</span>}
         {sessions.map((x) => (
           <button key={x.id} onClick={() => onPick(x.id)} aria-pressed={x.id === activeId}
-            className={`rounded-lg border px-2 py-1 text-xs font-semibold ${x.id === activeId ? 'border-copper bg-copper/20' : 'border-line hover:bg-raised'} ${x.suspended ? 'opacity-60' : ''}`}>
+            className={`min-h-[44px] rounded-lg border px-3 text-sm font-semibold ${x.id === activeId ? 'border-copper bg-copper/20' : 'border-line hover:bg-raised'} ${x.suspended ? 'opacity-60' : ''}`}>
             {sessionLabel(x)} {x.status === 'em_fechamento' && '· conta'} {x.suspended && '· suspenso'}
           </button>
         ))}
@@ -421,19 +523,36 @@ function SessionsStrip({ sessions, activeId, onPick, onOpen, onCounter, canOpen 
   );
 }
 
-function ActivePanel({ session: a, last, tz, onPay, onPrint, onCancelItem, onTransfer, onFee, onRequestClose, onCancelSession, onSuspend, onCustomer, onRedeem, onSend, can }) {
+const KITCHEN_LABEL = { novo: 'na fila', aceito: 'aceito', preparando: 'preparando', pronto: 'pronto', entregue: 'entregue', cancelado: 'cancelado' };
+const itemState = (i) => (i.status === 'ativo' && i.kitchen_status !== 'nao_produz' ? (i.sent_at ? KITCHEN_LABEL[i.kitchen_status] : 'aguardando envio') : '');
+// Itens iguais (mesmo produto, opções, observação, preço e etapa) aparecem numa linha só, com − e +
+function groupItems(items) {
+  const out = [];
+  const idx = new Map();
+  for (const i of items) {
+    const key = i.status !== 'ativo' ? `x${i.id}` : [i.product_id, (i.modifiers || []).map((m) => m.id || m.name).join(','), i.notes || '', i.unit_price_cents, i.unit, itemState(i), i.transferred_from ? 't' : ''].join('|');
+    if (i.status === 'ativo' && i.unit !== 'un' && i.unit) { out.push({ key: `w${i.id}`, items: [i] }); continue; } // peso: linha própria
+    if (idx.has(key)) idx.get(key).items.push(i);
+    else { const g = { key, items: [i] }; idx.set(key, g); out.push(g); }
+  }
+  return out;
+}
+
+function ActivePanel({ session: a, last, tz, onPay, onPrint, onCancelItem, onTransfer, onFee, onRequestClose, onCancelSession, onSuspend, onCustomer, onRedeem, onSend, onRelaunch, canRelaunch, can }) {
+  const [more, setMore] = useState(false);
   if (!a) {
-    return <div className="p-4"><Empty icon={Receipt} title="Nenhum destino selecionado">Selecione um consumo, leia uma comanda ou inicie uma venda de balcão.</Empty>
+    return <div className="p-4"><Empty icon={Receipt} title="Nenhum destino selecionado">Toque numa mesa ou comanda acima, abra uma nova ou use Balcão para venda rápida.</Empty>
       {last && <LastLaunch last={last} tz={tz} />}</div>;
   }
   const t = a.totals;
-  const items = a.items;
+  const groups = groupItems(a.items);
+  const open = a.status === 'aberta';
   return (
     <div className="flex flex-col p-3">
       <div className="flex items-start justify-between gap-2">
         <div>
           <div className="font-display text-4xl leading-none tracking-wide">{sessionLabel(a)}</div>
-          <div className="text-xs text-muted">Aberto {time(a.opened_at, tz)} por {a.opened_by_name || '—'} · {a.status === 'aberta' ? 'aberto' : a.status === 'em_fechamento' ? 'em fechamento' : a.status}</div>
+          <div className="text-xs text-muted">Aberto {time(a.opened_at, tz)} por {a.opened_by_name || '—'} · {open ? 'aberto' : a.status === 'em_fechamento' ? 'conta pedida' : a.status}</div>
         </div>
         {a.status === 'em_fechamento' && <Badge tone="warn">Conta pedida</Badge>}
       </div>
@@ -441,43 +560,59 @@ function ActivePanel({ session: a, last, tz, onPay, onPrint, onCancelItem, onTra
         {a.customer_id ? (
           <span className="chip border-line bg-raised"><UserRound size={12} /> {a.customer_name}{a.customer_points ? ` · ${a.customer_points} pts` : ''}</span>
         ) : a.customer_name ? <span className="chip border-line bg-raised">{a.customer_name}</span> : null}
-        {can('clientes.visualizar') && ['aberta', 'em_fechamento'].includes(a.status) && <button className="text-xs underline" onClick={onCustomer}>{a.customer_id ? 'trocar cliente' : 'identificar cliente (CPF)'}</button>}
-        {a.customer_id && a.customer_points > 0 && can('pdv.receber') && t.balance > 0 && <button className="text-xs underline" onClick={onRedeem}><Gift size={12} className="inline" /> usar pontos</button>}
+        {can('clientes.visualizar') && ['aberta', 'em_fechamento'].includes(a.status) && <button className="min-h-[44px] text-sm underline" onClick={onCustomer}>{a.customer_id ? 'trocar cliente' : 'identificar cliente (CPF)'}</button>}
+        {a.customer_id && a.customer_points > 0 && can('pdv.receber') && t.balance > 0 && <button className="min-h-[44px] text-sm underline" onClick={onRedeem}><Gift size={12} className="inline" /> usar pontos</button>}
       </div>
       {a.pending_send > 0 && (
         <button className="btn-primary mt-2 w-full" onClick={onSend}><ChefHat size={16} /> Enviar à produção ({a.pending_send})</button>
       )}
-      <ul className="mt-3 max-h-[40vh] divide-y divide-line overflow-y-auto" aria-label="Itens">
-        {!items.length && <li className="py-4 text-sm text-muted">Sem itens lançados.</li>}
-        {items.map((i) => (
-          <li key={i.id} className={`flex items-start gap-2 py-2 text-sm ${i.status !== 'ativo' ? 'text-muted line-through' : ''}`}>
-            <div className="flex-1">
-              <div className="font-medium">{qtyFmt(i.qty, i.unit)} × {i.description}</div>
-              {!!i.modifiers?.length && <div className="text-xs text-muted">{i.modifiers.map((m) => m.name).join(', ')}</div>}
-              {i.notes && <div className="text-xs italic text-muted">Obs.: {i.notes}</div>}
-              <div className="text-[10px] uppercase text-muted">{({ manual: 'manual', continua: 'leitura', dupla: 'dupla leitura', excecao: 'exceção', balcao: 'balcão', delivery: 'delivery' })[i.launch_mode]}{i.status === 'ativo' && i.kitchen_status !== 'nao_produz' ? ` · ${i.sent_at ? ({ novo: 'na fila', aceito: 'aceito', preparando: 'preparando', pronto: 'pronto', entregue: 'entregue', cancelado: 'cancelado' })[i.kitchen_status] : 'aguardando envio'}` : ''} · {time(i.created_at, tz)}{i.transferred_from ? ' · transferido' : ''}{i.status !== 'ativo' && i.cancel_reason ? ` · ${i.cancel_reason}` : ''}</div>
-            </div>
-            <div className="text-right">
-              <div>{money(i.total_cents)}</div>
-              {i.status === 'ativo' && a.status === 'aberta' && <button className="text-xs text-rust underline" onClick={() => onCancelItem(i)}>cancelar</button>}
-            </div>
-          </li>
-        ))}
+      <ul className="mt-2 max-h-[45vh] divide-y divide-line overflow-y-auto lg:max-h-[40vh]" aria-label="Itens">
+        {!groups.length && <li className="py-4 text-sm text-muted">Sem itens lançados. Toque nos produtos para lançar.</li>}
+        {groups.map(({ key, items }) => {
+          const i = items[items.length - 1];
+          const qty = items.reduce((n, x) => n + Number(x.qty), 0);
+          const total = items.reduce((n, x) => n + Number(x.total_cents), 0);
+          const live = i.status === 'ativo';
+          return (
+            <li key={key} className={`flex items-center gap-2 py-2 text-sm ${live ? '' : 'text-muted line-through'}`} data-item-group={i.description}>
+              <div className="min-w-0 flex-1">
+                <div className="font-medium">{qtyFmt(qty, i.unit)} × {i.description}</div>
+                {!!i.modifiers?.length && <div className="text-xs text-muted">{i.modifiers.map((m) => m.name).join(', ')}</div>}
+                {i.notes && <div className="text-xs italic text-muted">Obs.: {i.notes}</div>}
+                <div className="text-[11px] uppercase text-muted">{[itemState(i), live ? '' : 'cancelado', i.transferred_from ? 'transferido' : '', time(i.created_at, tz), !live && i.cancel_reason ? i.cancel_reason : ''].filter(Boolean).join(' · ')}</div>
+              </div>
+              <div className="text-right font-medium">{money(total)}</div>
+              {live && open && (
+                <div className="flex items-center gap-1">
+                  <button className="tap flex items-center justify-center rounded-lg border border-line text-rust hover:bg-rust/10" onClick={() => onCancelItem(i)}
+                    aria-label={`Cancelar 1 ${i.description}`} title="Cancelar um (pede motivo)"><Minus size={16} /></button>
+                  {canRelaunch && i.unit === 'un' && i.product_id && (
+                    <button className="tap flex items-center justify-center rounded-lg border border-line hover:bg-raised" onClick={() => onRelaunch(i)}
+                      aria-label={`Lançar mais 1 ${i.description}`} title="Lançar mais um igual"><Plus size={16} /></button>
+                  )}
+                </div>
+              )}
+            </li>
+          );
+        })}
       </ul>
       <dl className="mt-3 space-y-0.5 border-t border-line pt-2 text-sm">
         <div className="flex justify-between"><dt>Consumo</dt><dd>{money(t.items)}</dd></div>
-        <div className="flex justify-between"><dt>Taxa de serviço {bp(t.serviceFeeBp)} <button className="text-xs underline" onClick={onFee}>ajustar</button></dt><dd>{money(t.serviceFee)}</dd></div>
+        <div className="flex items-center justify-between"><dt>Taxa de serviço {bp(t.serviceFeeBp)} <button className="ml-1 min-h-[36px] text-xs underline" onClick={onFee}>ajustar</button></dt><dd>{money(t.serviceFee)}</dd></div>
         {t.deliveryFee > 0 && <div className="flex justify-between"><dt>Taxa de entrega</dt><dd>{money(t.deliveryFee)}</dd></div>}
         <div className="flex justify-between"><dt>Pago</dt><dd>{money(t.paid)}</dd></div>
         <div className="flex justify-between font-display text-3xl"><dt>Saldo</dt><dd>{money(t.balance)}</dd></div>
       </dl>
       <div className="mt-3 grid grid-cols-2 gap-2">
-        {can('pdv.receber') && <button className="btn-primary btn-xl col-span-2" onClick={onPay}><Receipt size={18} /> Receber</button>}
+        {can('pdv.receber') && <button className="btn-primary btn-xl col-span-2 hidden lg:flex" onClick={onPay}><Receipt size={18} /> Receber</button>}
         <button className="btn-ghost" onClick={onPrint}><Printer size={16} /> Pré-conta</button>
-        <button className="btn-ghost" onClick={onRequestClose}>{a.status === 'aberta' ? 'Pedir conta' : 'Voltar a lançar'}</button>
-        {can('pdv.transferir_item') && <button className="btn-ghost" onClick={onTransfer}><ArrowRightLeft size={16} /> Transferir</button>}
-        <button className="btn-ghost" onClick={onSuspend}>{a.suspended ? <><Play size={16} /> Retomar</> : <><Pause size={16} /> Suspender</>}</button>
-        <button className="btn-ghost col-span-2 text-rust" onClick={onCancelSession}><Ban size={16} /> Cancelar consumo</button>
+        <button className="btn-ghost" onClick={onRequestClose}>{open ? 'Pedir conta' : 'Voltar a lançar'}</button>
+        <button className="btn-ghost col-span-2" onClick={() => setMore((v) => !v)} aria-expanded={more} data-more-actions><MoreHorizontal size={16} /> {more ? 'Menos ações' : 'Mais ações'}</button>
+        {more && <>
+          {can('pdv.transferir_item') && <button className="btn-ghost" onClick={onTransfer}><ArrowRightLeft size={16} /> Transferir itens</button>}
+          <button className="btn-ghost" onClick={onSuspend}>{a.suspended ? <><Play size={16} /> Retomar</> : <><Pause size={16} /> Suspender</>}</button>
+          <button className="btn-ghost col-span-2 text-rust" onClick={onCancelSession}><Ban size={16} /> Cancelar consumo</button>
+        </>}
       </div>
       {last && <LastLaunch last={last} tz={tz} />}
     </div>
@@ -566,7 +701,7 @@ function FeeModal({ open, session, onClose, onDone }) {
     } catch (e) { setErr(e); }
   };
   return (
-    <Modal open={open} onClose={onClose} title="Taxa de serviço" footer={<><button className="btn-ghost" onClick={onClose}>Voltar</button><button className="btn-primary" disabled={reason.trim().length < 3 || (needs && !token)} onClick={go}>Aplicar</button></>}>
+    <Modal open={open} onClose={onClose} title="Taxa de serviço" footer={<><button className="btn-ghost" onClick={onClose}>Voltar</button><button className="btn-primary" aria-disabled={(reason.trim().length < 3 || (needs && !token)) || undefined} data-why={reason.trim().length < 3 ? 'Escreva o motivo (ex.: cliente pediu para tirar)' : 'Falta a autorização do gerente'} onClick={go}>Aplicar</button></>}>
       <p className="text-sm text-muted">A taxa aparece discriminada na conta e pode ser ajustada ou retirada a pedido do cliente.</p>
       <Field label="Percentual (%)" className="mt-3"><input className="input" inputMode="decimal" value={pct} onChange={(e) => setPct(e.target.value)} /></Field>
       <Field label="Motivo" className="mt-3"><input className="input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
@@ -588,7 +723,7 @@ function AttachCustomerModal({ open, session, onClose, onDone }) {
   return (
     <Modal open={open} onClose={onClose} title="Identificar cliente"
       footer={<>{session?.customer_id && <button className="btn-ghost mr-auto" onClick={() => go(null)}>Remover cliente</button>}<button className="btn-ghost" onClick={onClose}>Voltar</button>
-        <button className="btn-primary" disabled={!customer} onClick={() => go(customer.id)}>Vincular</button></>}>
+        <button className="btn-primary" aria-disabled={(!customer) || undefined} data-why={'Busque e escolha o cliente primeiro'} onClick={() => go(customer.id)}>Vincular</button></>}>
       <CustomerPicker key={k} onChange={setCustomer} autoFocus />
       <p className="mt-2 text-xs text-muted">O cliente identificado acumula pontos no encerramento (se o programa de fidelidade estiver ligado) e o consumo entra no histórico dele.</p>
       <div className="mt-3"><ErrorBox error={err} /></div>
@@ -608,7 +743,7 @@ function RedeemModal({ open, session, onClose, onDone }) {
     catch (e) { setErr(e); }
   };
   return (
-    <Modal open={open} onClose={onClose} title="Usar pontos" footer={<><button className="btn-ghost" onClick={onClose}>Voltar</button><button className="btn-primary" disabled={!n} onClick={go}>Resgatar {money(value)}</button></>}>
+    <Modal open={open} onClose={onClose} title="Usar pontos" footer={<><button className="btn-ghost" onClick={onClose}>Voltar</button><button className="btn-primary" aria-disabled={(!n) || undefined} data-why={'Informe quantos pontos usar'} onClick={go}>Resgatar {money(value)}</button></>}>
       <p className="text-sm">{session?.customer_name} tem <b>{session?.customer_points}</b> pontos{cfg ? ` (cada ponto vale ${money(cfg.point_value_cents)}; mínimo ${cfg.min_redeem})` : ''}.</p>
       <Field label="Pontos a usar" className="mt-3"><input className="input text-2xl" inputMode="numeric" value={pts} onChange={(e) => setPts(e.target.value.replace(/\D/g, ''))} /></Field>
       <p className="mt-2 text-xs text-muted">O resgate entra como pagamento "vale". Se o pagamento for estornado, os pontos voltam ao cliente.</p>

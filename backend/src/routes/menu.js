@@ -46,6 +46,7 @@ router.get('/products', need('cardapio.visualizar'), h(async (req, res) => {
   const { rows } = await q(
     `select p.id, p.name, p.description, p.sku, p.kind, p.unit, p.price_cents, ${showCost ? 'p.cost_cents,' : ''} p.favorite, p.active, p.demo,
             p.category_id, p.sector_id, p.channels, p.allergens,
+            case when p.photo is not null then floor(extract(epoch from coalesce(p.photo_updated_at, p.updated_at)))::bigint end as photo_v,
             coalesce((select array_agg(s.code order by s.id) from scan_codes s where s.company_id = p.company_id and s.entity = 'PRODUTO' and s.entity_id = p.id), '{}') as codes,
             coalesce((select json_agg(json_build_object('id', g.id, 'name', g.name, 'min', g.min_select, 'max', g.max_select,
                'options', (select coalesce(json_agg(json_build_object('id', o.id, 'name', o.name, 'price_cents', o.price_cents) order by o.id), '[]')
@@ -117,6 +118,8 @@ router.post('/products', need('cardapio.gerenciar'), h(async (req, res) => {
 router.put('/products/:id', need('cardapio.gerenciar'), h(async (req, res) => {
   const id = Number(req.params.id);
   const b = parse(productSchema.partial(), req.body);
+  // edição parcial: campo não enviado fica como está (os padrões do cadastro, ex.: canais = só PDV, não valem aqui)
+  for (const k of Object.keys(b)) if (!Object.prototype.hasOwnProperty.call(req.body || {}, k)) delete b[k];
   await tx(async (db) => {
     const cur = (await db.query('select * from products where id = $1 and company_id = $2 for update', [id, req.ctx.companyId])).rows[0];
     if (!cur) throw notFound('Produto não encontrado');
@@ -140,6 +143,40 @@ router.put('/products/:id', need('cardapio.gerenciar'), h(async (req, res) => {
     await audit(db, req.ctx, 'produto.alterado', { entity: 'product', entityId: id, data: { ...b, groups: b.groups ? 'alterados' : undefined } });
   }).catch((e) => { if (e.code === '23505') throw conflict('SKU já usado em outro produto'); throw e; });
   res.json({ ok: true });
+}));
+
+// Foto opcional do produto (cardápio digital). O navegador já envia a imagem reduzida (JPEG/PNG/WebP, até ~300 KB).
+export function parsePhoto(dataUrl) {
+  const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl || ''));
+  if (!m) throw bad('Envie uma imagem JPG, PNG ou WebP');
+  const buf = Buffer.from(m[2], 'base64');
+  if (buf.length > 300 * 1024) throw bad('Imagem grande demais (máx. 300 KB). Use uma foto menor.');
+  const sig = buf.subarray(0, 4).toString('hex');
+  const ok = { 'image/png': sig.startsWith('89504e47'), 'image/jpeg': sig.startsWith('ffd8'), 'image/webp': buf.subarray(8, 12).toString() === 'WEBP' }[m[1]];
+  if (!ok) throw bad('O conteúdo do arquivo não é uma imagem válida');
+  return { mime: m[1], buf };
+}
+
+router.put('/products/:id/photo', need('cardapio.gerenciar'), h(async (req, res) => {
+  const id = Number(req.params.id);
+  parsePhoto(req.body?.data_url);
+  const r = await q('update products set photo = $3, photo_updated_at = now() where id = $1 and company_id = $2 returning id', [id, req.ctx.companyId, req.body.data_url]);
+  if (!r.rowCount) throw notFound('Produto não encontrado');
+  await audit({ query: q }, req.ctx, 'produto.foto', { entity: 'product', entityId: id, data: { size: req.body.data_url.length } });
+  res.json({ ok: true });
+}));
+
+router.delete('/products/:id/photo', need('cardapio.gerenciar'), h(async (req, res) => {
+  const id = Number(req.params.id);
+  const r = await q('update products set photo = null, photo_updated_at = now() where id = $1 and company_id = $2 returning id', [id, req.ctx.companyId]);
+  if (!r.rowCount) throw notFound('Produto não encontrado');
+  await audit({ query: q }, req.ctx, 'produto.foto_removida', { entity: 'product', entityId: id });
+  res.json({ ok: true });
+}));
+
+router.get('/products/:id/photo', need('cardapio.visualizar'), h(async (req, res) => {
+  const r = (await q('select photo from products where id = $1 and company_id = $2', [Number(req.params.id), req.ctx.companyId])).rows[0];
+  res.json({ data_url: r?.photo || null });
 }));
 
 router.get('/products/:id/prices', need('cardapio.visualizar'), h(async (req, res) => {

@@ -24,7 +24,8 @@ router.get('/:slug/menu', h(async (req, res) => {
   const c = await companyBySlug(req.params.slug);
   const cfg = deliveryConfig(c.settings);
   if (!cfg.enabled) throw notFound('Cardápio digital desativado');
-  const products = (await q(`select p.id, p.name, p.description, p.price_cents, p.allergens, p.category_id, c.name as category,
+  const products = (await q(`select p.id, p.name, p.description, p.price_cents, p.allergens, p.category_id, c.name as category, c.demo as category_demo,
+      case when p.photo is not null then floor(extract(epoch from coalesce(p.photo_updated_at, p.updated_at)))::bigint end as photo_v,
       coalesce((select json_agg(json_build_object('id', g.id, 'name', g.name, 'min', g.min_select, 'max', g.max_select,
          'options', (select coalesce(json_agg(json_build_object('id', o.id, 'name', o.name, 'price_cents', o.price_cents) order by o.id), '[]')
                        from modifier_options o where o.group_id = g.id and o.active)) order by g.sort, g.id) from modifier_groups g where g.product_id = p.id), '[]') as groups
@@ -36,6 +37,18 @@ router.get('/:slug/menu', h(async (req, res) => {
     settings: { accepting: cfg.accepting, delivery: cfg.delivery, pickup: cfg.pickup, fee_cents: cfg.fee_cents, min_order_cents: cfg.min_order_cents,
       eta_minutes: cfg.eta_minutes, hours: cfg.hours, areas: cfg.areas, message: cfg.message, payment_methods: cfg.payment_methods },
     products });
+}));
+
+// Foto do produto no cardápio digital (imagem binária, com cache; o "v" na URL muda quando a foto é trocada)
+router.get('/:slug/foto/:id', h(async (req, res) => {
+  const c = await companyBySlug(req.params.slug);
+  const r = (await q(`select photo from products where id = $1 and company_id = $2 and active and photo is not null`, [Number(req.params.id) || 0, c.id])).rows[0];
+  if (!r) throw notFound('Foto não encontrada');
+  const m = /^data:(image\/(?:jpeg|png|webp));base64,(.+)$/.exec(r.photo);
+  if (!m) throw notFound('Foto não encontrada');
+  res.set('cache-control', 'public, max-age=86400');
+  res.set('cross-origin-resource-policy', 'cross-origin'); // o site pode estar em outro endereço que a API
+  res.type(m[1]).send(Buffer.from(m[2], 'base64'));
 }));
 
 const orderSchema = z.object({
@@ -64,7 +77,7 @@ router.post('/:slug/orders', h(async (req, res) => {
 // Acompanhamento pelo link secreto do pedido (sem telefone/endereço)
 router.get('/orders/:token', h(async (req, res) => {
   if (!/^[A-Za-z0-9_-]{16,40}$/.test(req.params.token)) throw notFound('Pedido não encontrado');
-  const o = (await q(`select d.id, d.number, d.status, d.mode, d.eta_minutes, d.created_at, d.updated_at, d.session_id, d.customer_name, c.name as company, c.slug
+  const o = (await q(`select d.id, d.number, d.status, d.mode, d.eta_minutes, d.created_at, d.updated_at, d.session_id, d.customer_name, c.name as company, c.slug, c.phone as company_phone
     from delivery_orders d join companies c on c.id = d.company_id where d.public_token = $1`, [req.params.token])).rows[0];
   if (!o) throw notFound('Pedido não encontrado');
   const items = (await q(`select description, qty, modifiers, total_cents from order_items where session_id = $1 and status = 'ativo' order by id`, [o.session_id])).rows;
@@ -72,7 +85,7 @@ router.get('/orders/:token', h(async (req, res) => {
   const t = await sessionTotals({ query: q }, o.session_id);
   res.set('cache-control', 'no-store');
   res.json({ number: o.number, status: o.status, label: STATUS_LABEL[o.status], mode: o.mode, eta_minutes: o.eta_minutes, created_at: o.created_at,
-    first_name: o.customer_name.split(' ')[0], company: o.company, slug: o.slug, items, totals: { items: t.items, delivery_fee: t.deliveryFee, total: t.total },
+    first_name: o.customer_name.split(' ')[0], company: o.company, slug: o.slug, company_phone: o.company_phone || null, items, totals: { items: t.items, delivery_fee: t.deliveryFee, total: t.total },
     events: events.map((e) => ({ status: e.status, label: STATUS_LABEL[e.status], at: e.created_at })) });
 }));
 

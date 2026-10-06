@@ -51,7 +51,7 @@ export async function createCards(db, companyId, unitId, from, count, prefix = '
 const DEMO = [
   ['Cervejas', 'Bar', [['Cerveja IPA 600 ml', 2890, '7890000000011'], ['Pilsen long neck', 1290, '7890000000028'], ['Chope 300 ml', 1190, null]]],
   ['Drinks', 'Bar', [['Caipirinha', 2400, null], ['Gin tônica', 3200, null]]],
-  ['Lanches', 'Cozinha', [['Hambúrguer da oficina', 3890, null], ['Porção de fritas', 2690, null]]],
+  ['Lanches', 'Cozinha', [['Hambúrguer da casa', 3890, null], ['Porção de fritas', 2690, null]]],
   ['Sem álcool', 'Bar', [['Refrigerante lata', 700, '7890000000035'], ['Água mineral', 500, '7890000000042']]],
 ];
 
@@ -113,7 +113,7 @@ export async function seedDemoActivity(db, companyId, unitId, userId, businessDa
   }
   if (table) {
     await open('mesa', { tableId: table.id, label: 'Mesa 3' },
-      [['Hambúrguer da oficina', 2, 'preparando'], ['Porção de fritas', 1, 'pronto'], ['Chope 300 ml', 4, 'entregue']]);
+      [['Hambúrguer da casa', 2, 'preparando'], ['Porção de fritas', 1, 'pronto'], ['Chope 300 ml', 4, 'entregue']]);
     await db.query("update dining_tables set status = 'ocupada' where id = $1", [table.id]);
   }
   if (cards[0]) await open('comanda', { cardId: cards[0].id }, [['Cerveja IPA 600 ml', 2, 'nao_produz'], ['Caipirinha', 1, 'novo']]);
@@ -167,7 +167,7 @@ async function seedDemoModules(db, companyId, unitId, userId, closedId) {
       [companyId, r.rows[0].id, qty, cost, userId]);
   }
   const prods = Object.fromEntries((await db.query('select id, name from products where company_id = $1', [companyId])).rows.map((p) => [p.name, p.id]));
-  for (const [prod, lines, cost] of [['Hambúrguer da oficina', [['Carne moída', 0.18], ['Pão brioche', 1]], 726], ['Porção de fritas', [['Batata congelada', 0.4]], 360],
+  for (const [prod, lines, cost] of [['Hambúrguer da casa', [['Carne moída', 0.18], ['Pão brioche', 1]], 726], ['Porção de fritas', [['Batata congelada', 0.4]], 360],
     ['Chope 300 ml', [['Chope (barril)', 0.3]], 360], ['Caipirinha', [['Limão', 0.12], ['Cachaça', 0.06]], 222]]) {
     if (!prods[prod]) continue;
     const r = await db.query('insert into recipes (company_id, product_id, version, yield_qty, created_by) values ($1,$2,1,1,$3) returning id', [companyId, prods[prod], userId]);

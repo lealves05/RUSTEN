@@ -18,6 +18,17 @@ async function unitCutoff(db, companyId, unitId) {
 }
 
 // ---- Roteador de códigos ----
+
+// Nome do destino como a equipe enxerga (Comanda 12 · Mesa 3, Mesa 3, Balcão, Retirada…) — nunca o id interno
+async function destinationLabel(db, session) {
+  const parts = [];
+  if (session.card_id) parts.push(`Comanda ${(await db.query('select number from tab_cards where id = $1', [session.card_id])).rows[0]?.number ?? ''}`.trim());
+  if (session.table_id) parts.push(`Mesa ${(await db.query('select number from dining_tables where id = $1', [session.table_id])).rows[0]?.number ?? ''}`.trim());
+  if (parts.length) return parts.join(' · ');
+  if (session.label) return session.label;
+  return session.kind === 'balcao' ? 'Balcão' : `Consumo ${session.id}`;
+}
+
 router.post('/resolve', need('pdv.lancar'), h(async (req, res) => {
   const { code } = parse(z.object({ code: z.string().max(256) }), req.body);
   const r = await resolveCode({ query: q }, req.ctx.companyId, code);
@@ -267,7 +278,7 @@ router.post('/items', need('pdv.lancar'), h(async (req, res) => {
     }
     return { item, totals: await sessionTotals(db, session.id),
       confirmation: { product: p.name, qty, unit_price_cents: unitPrice + modsCents, total_cents: total,
-        destination: session.card_id ? `Comanda ${(await db.query('select number from tab_cards where id = $1', [session.card_id])).rows[0].number}` : session.label || `Consumo ${session.id}` } };
+        destination: await destinationLabel(db, session) } };
   }).catch(async (e) => {
     if (e.code === '23505') { // corrida com a mesma chave: devolve o que foi gravado
       const again = await q('select * from order_items where company_id = $1 and idempotency_key = $2', [ctx.companyId, b.idempotency_key]);

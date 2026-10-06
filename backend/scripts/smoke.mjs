@@ -1202,6 +1202,46 @@ await check('cozinha: recusar tira da fila e do painel da TV, mas mantém o item
   assert.equal(after.totals.total, before); assert.ok(after.items.find((x) => x.id === it.id && x.status === 'ativo'));
   assert.equal((await apiC('POST', '/api/kitchen/items/refuse', { item_ids: [it.id] })).data.refused, 0); // repetir não faz nada
 });
+// o token de acesso dura pouco: estas verificações entram com um login novo
+const fresh = async (email, terminalId) => client((await anon('POST', '/api/auth/login', { email, password: 'Motocustom2026x' })).data.access_token, terminalId);
+await check('confirmação do lançamento usa o nome da mesa (não o id interno)', async () => {
+  const api = await fresh('a@teste.dev', A.terminal);
+  const t = (await api('GET', '/api/floor/tables')).data.tables.find((x) => x.status === 'livre' && !x.open_sessions);
+  const sres = await api('POST', '/api/pdv/sessions', { kind: 'mesa', table_id: t.id });
+  assert.equal(sres.status, 201, JSON.stringify(sres.data));
+  const r = await api('POST', '/api/pdv/items', { session_id: sres.data.id, product_id: ipa.id, launch_mode: 'manual', qty: 1, idempotency_key: key() });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  assert.equal(r.data.confirmation.destination, `Mesa ${t.number}`);
+  const b = (await api('POST', '/api/pdv/sessions', { kind: 'balcao' })).data;
+  const r2 = await api('POST', '/api/pdv/items', { session_id: b.id, product_id: ipa.id, launch_mode: 'manual', qty: 1, idempotency_key: key() });
+  assert.equal(r2.data.confirmation.destination, 'Balcão');
+});
+await check('foto do produto: valida, aparece no cardápio digital (binária, com cache) e some ao remover', async () => {
+  const api = await fresh('a@teste.dev', A.terminal); const O = await register('Outra Foto', 'foto@teste.dev'); const apiB = client(O.token, O.terminal);
+  const png = 'data:image/png;base64,' + Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex').toString('base64');
+  { const x = await api('PUT', `/api/menu/products/${ipa.id}/photo`, { data_url: 'data:image/png;base64,AAAA' }); assert.equal(x.status, 400, JSON.stringify(x.data)); } // não é PNG de verdade
+  { const x = await api('PUT', `/api/menu/products/${ipa.id}/photo`, { data_url: 'data:text/html;base64,PGI+' }); assert.equal(x.status, 400, JSON.stringify(x.data)); }
+  { const x = await apiB('PUT', `/api/menu/products/${ipa.id}/photo`, { data_url: png }); assert.equal(x.status, 404, JSON.stringify(x.data)); } // outra empresa
+  const up = await api('PUT', `/api/menu/products/${ipa.id}/photo`, { data_url: png }); assert.equal(up.status, 200, JSON.stringify(up.data));
+  const list = (await api('GET', '/api/menu/products')).data;
+  assert.ok(list.find((p) => p.id === ipa.id).photo_v > 0);
+  assert.ok(!('photo' in list[0])); // a lista não carrega a imagem
+  const cfg = await api('PUT', '/api/delivery/settings', { slug: 'smoke-foto', enabled: true, accepting: true, delivery: true, pickup: true, fee_cents: 0, min_order_cents: 0, eta_minutes: 30, hours: '', areas: '', message: '', payment_methods: ['pix'] });
+  assert.equal(cfg.status, 200, JSON.stringify(cfg.data));
+  const menu = await anon('GET', '/api/public/smoke-foto/menu');
+  assert.ok(menu.data.products.find((p) => p.id === ipa.id).photo_v > 0);
+  const img = await fetch(`${base}/api/public/smoke-foto/foto/${ipa.id}`);
+  assert.equal(img.status, 200); assert.equal(img.headers.get('content-type'), 'image/png');
+  assert.match(img.headers.get('cache-control') || '', /max-age/);
+  assert.equal((await fetch(`${base}/api/public/pub-garagem/foto/${ipa.id}`)).status, 404); // foto de outra empresa não vaza por outro endereço
+  // editar só o preço não tira o produto do cardápio digital nem apaga opções e códigos
+  const bur0 = (await api('GET', '/api/menu/products')).data.find((p) => p.id === burger.id);
+  assert.equal((await api('PUT', `/api/menu/products/${burger.id}`, { price_cents: bur0.price_cents })).status, 200);
+  const bur1 = (await api('GET', '/api/menu/products')).data.find((p) => p.id === burger.id);
+  assert.deepEqual(bur1.channels, bur0.channels); assert.equal(bur1.groups.length, bur0.groups.length); assert.deepEqual(bur1.codes, bur0.codes);
+  assert.equal((await api('DELETE', `/api/menu/products/${ipa.id}/photo`)).status, 200);
+  assert.equal((await fetch(`${base}/api/public/smoke-foto/foto/${ipa.id}`)).status, 404);
+});
 await check('remoção da demonstração preserva produtos já vendidos', async () => {
   const login = await anon('POST', '/api/auth/login', { email: 'a@teste.dev', password: 'Motocustom2026x' });
   const a2 = client(login.data.access_token, A.terminal);

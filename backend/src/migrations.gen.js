@@ -43,5 +43,9 @@ export const MIGRATIONS = [
  {
   "name": "011_compras_codigo_barras.sql",
   "sql": "-- RUSTEN — 011: entrada de compras pelo código de barras (chave da NF-e no DANFE ou pedido de compra impresso pelo RUSTEN).\n-- CNPJ do fornecedor guardado na compra para reconhecer o fornecedor pela chave da próxima nota.\n-- Rollback: migrations/rollback/011_compras_codigo_barras.down.sql\nalter table purchases add column if not exists supplier_doc text;\ncreate index if not exists purchases_supplier_doc_idx on purchases (company_id, supplier_doc) where supplier_doc is not null;\n"
+ },
+ {
+  "name": "012_foto_produto.sql",
+  "sql": "-- RUSTEN — 012: foto opcional do produto (cardápio digital). Só adiciona colunas; produtos existentes ficam sem foto.\n-- A imagem fica no próprio banco (data URL já reduzida no navegador, até ~300 KB) e é servida por /api/public/:slug/foto/:id.\n-- Rollback: migrations/rollback/012_foto_produto.down.sql\nalter table products add column if not exists photo text;\nalter table products add column if not exists photo_updated_at timestamptz;\n"
  }
 ];

@@ -23,7 +23,8 @@ export function DemoBar() {
 
 function ActivateModal({ open, onClose }) {
   const s = useSession();
-  const [f, setF] = useState({ company_name: '', name: '', email: '', password: '', phone: '', keep_data: false, accept_terms: false });
+  const realEmail = s.me?.user?.email && !s.me.user.email.endsWith('@demo.rusten.app') ? s.me.user.email : '';
+  const [f, setF] = useState({ company_name: '', name: realEmail ? s.me?.user?.name || '' : '', email: realEmail, password: '', phone: '', keep_data: false, accept_terms: false });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const set = (k, v) => setF({ ...f, [k]: v });
@@ -45,7 +46,7 @@ function ActivateModal({ open, onClose }) {
           <Field label="E-mail de acesso"><input className="input" type="email" autoComplete="username" required value={f.email} onChange={(e) => set('email', e.target.value)} /></Field>
           <Field label="Telefone (opcional)"><input className="input" inputMode="tel" value={f.phone} onChange={(e) => set('phone', e.target.value)} /></Field>
         </div>
-        <Field label="Senha" hint="Mínimo de 10 caracteres, com letras e números."><input className="input" type="password" autoComplete="new-password" required value={f.password} onChange={(e) => set('password', e.target.value)} /></Field>
+        <Field label="Senha" hint={realEmail ? 'Pode repetir a senha da demonstração ou escolher outra (10+ caracteres, letras e números).' : 'Mínimo de 10 caracteres, com letras e números.'}><input className="input" type="password" autoComplete="new-password" required value={f.password} onChange={(e) => set('password', e.target.value)} /></Field>
         <Toggle checked={f.keep_data} onChange={(v) => set('keep_data', v)} label="Manter os dados de exemplo"
           hint="Desligado: apaga o cardápio e o movimento de exemplo e mantém mesas, cartões e configurações." />
         <label className="flex items-start gap-2 text-sm">

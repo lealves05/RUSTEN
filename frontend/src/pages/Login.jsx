@@ -3,7 +3,7 @@ import { Sparkles } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api, tokens } from '../lib/api.js';
 import { useSession } from '../lib/session.jsx';
-import { ErrorBox, Field, Logo } from '../components/ui.jsx';
+import { ErrorBox, Field, Logo, Modal } from '../components/ui.jsx';
 
 export function AuthShell({ children, title, subtitle }) {
   return (
@@ -36,13 +36,7 @@ export default function Login() {
   const [err, setErr] = useState(null);
   const [cfg, setCfg] = useState(null);
   useEffect(() => { api('/api/auth/plans').then(setCfg).catch(() => setCfg(null)); }, []);
-  const demo = async () => {
-    setBusy(true); setErr(null);
-    try {
-      tokens.save(await api('/api/auth/demo', { method: 'POST' }));
-      await s.reload();
-    } catch (e2) { setErr(e2); } finally { setBusy(false); }
-  };
+  const [demoOpen, setDemoOpen] = useState(false);
   const submit = async (e) => {
     e.preventDefault(); setBusy(true); setErr(null);
     try {
@@ -60,14 +54,54 @@ export default function Login() {
         <button className="btn-primary btn-xl w-full" disabled={busy}>{busy ? 'Entrando…' : 'Entrar'}</button>
       </form>
       {cfg?.demo_enabled && (
-        <button type="button" className="btn-ghost btn-xl mt-3 w-full border border-copper/50" onClick={demo} disabled={busy}>
+        <button type="button" className="btn-ghost btn-xl mt-3 w-full border border-copper/50" onClick={() => setDemoOpen(true)} disabled={busy} data-demo-open>
           <Sparkles size={18} /> Experimentar demonstração
         </button>
       )}
+      <DemoSignup open={demoOpen} onClose={() => setDemoOpen(false)} onDone={() => s.reload()} />
       {cfg?.signup_open !== false
         ? <p className="mt-6 text-sm text-muted">Ainda não usa o RUSTEN? <Link className="font-semibold text-copper underline" to="/cadastro">Cadastre seu estabelecimento</Link></p>
         : <p className="mt-6 text-sm text-muted">Novos cadastros estão temporariamente fechados.</p>}
     </AuthShell>
+  );
+}
+
+/* Demonstração com acesso próprio: nome, e-mail e senha (mesma política do cadastro). A pessoa volta pelo login com o que cadastrou. */
+function DemoSignup({ open, onClose, onDone }) {
+  const [f, setF] = useState({ name: '', email: '', password: '', confirm: '', accept_terms: false });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const set = (k) => (e) => setF({ ...f, [k]: k === 'accept_terms' ? e.target.checked : e.target.value });
+  const submit = async (e) => {
+    e.preventDefault(); setErr(null);
+    if (f.name.trim().length < 2) return setErr(new Error('Informe seu nome'));
+    if (!/^\S+@\S+\.\S+$/.test(f.email.trim())) return setErr(new Error('Informe um e-mail válido'));
+    if (f.password.length < 10 || !/\d/.test(f.password) || !/[a-z]/i.test(f.password)) return setErr(new Error('A senha precisa ter 10+ caracteres, com letras e números'));
+    if (f.password !== f.confirm) return setErr(new Error('As senhas não conferem'));
+    if (!f.accept_terms) return setErr(new Error('É preciso aceitar os termos de uso e a política de privacidade'));
+    setBusy(true);
+    try {
+      tokens.save(await api('/api/auth/demo', { method: 'POST', body: { name: f.name.trim(), email: f.email.trim(), password: f.password, accept_terms: true } }));
+      onClose(); await onDone();
+    } catch (e2) { setErr(e2); } finally { setBusy(false); }
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="Experimentar demonstração">
+      <form onSubmit={submit} className="space-y-3" data-demo-form>
+        <p className="text-sm text-muted">Crie seu acesso para testar com um bar de exemplo (mesas, comandas, cozinha e caixa já com movimento). Use o mesmo e-mail e senha para voltar depois.</p>
+        <Field label="Seu nome"><input className="input" autoComplete="name" required value={f.name} onChange={set('name')} /></Field>
+        <Field label="E-mail"><input className="input" type="email" autoComplete="username" required value={f.email} onChange={set('email')} /></Field>
+        <Field label="Senha" hint="Mínimo de 10 caracteres, com letras e números."><input className="input" type="password" autoComplete="new-password" required value={f.password} onChange={set('password')} /></Field>
+        <Field label="Confirmar senha"><input className="input" type="password" autoComplete="new-password" required value={f.confirm} onChange={set('confirm')} /></Field>
+        <label className="flex min-h-[44px] items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1 h-5 w-5" checked={f.accept_terms} onChange={set('accept_terms')} />
+          <span>Li e aceito os termos de uso e a política de privacidade.</span>
+        </label>
+        <p className="text-xs text-muted">A demonstração usa dados de exemplo e é apagada após alguns dias sem ativação. Para continuar usando, toque em "Ativar minha conta" dentro do sistema.</p>
+        <ErrorBox error={err} />
+        <button className="btn-primary btn-xl w-full" disabled={busy} data-demo-submit>{busy ? 'Preparando…' : 'Criar acesso e entrar'}</button>
+      </form>
+    </Modal>
   );
 }
 

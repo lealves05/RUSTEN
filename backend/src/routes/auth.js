@@ -119,14 +119,26 @@ router.get('/plans', h(async (_req, res) => {
 }));
 
 // ---------- Demonstração: empresa de exemplo, sem central e apagada depois de alguns dias ----------
+// Exige nome, e-mail e senha próprios (mesma política do cadastro): a pessoa volta pelo login normal com o que cadastrou.
+const demoSchema = z.object({
+  name: z.string().trim().min(2, 'Informe seu nome').max(120),
+  email: z.string().trim().toLowerCase().email('E-mail inválido').max(160),
+  password: z.string().min(1, 'Informe a senha').max(200),
+  accept_terms: z.literal(true, { message: 'É preciso aceitar os termos' }),
+});
 router.post('/demo', h(async (req, res) => {
   const sys = await getSystemParams();
   if (sys.demo_enabled === false) throw new HttpError(403, 'A demonstração está desativada no momento.', 'demo_disabled');
   await rateLimit(`demo:${req.ip}`, 10, 3600);
+  const b = parse(demoSchema, req.body || {});
+  checkPassword(b.password);
+  if (b.email.endsWith('@demo.rusten.app')) throw bad('Use o seu e-mail');
+  const exists = await q('select 1 from users where lower(email) = $1', [b.email]);
+  if (exists.rows[0]) throw new HttpError(409, 'Este e-mail já está cadastrado. Use "Entrar" ou recupere a senha.', 'email_taken');
+  const hash = await bcrypt.hash(b.password, 12);
   // demonstrações abandonadas são apagadas
   const old = await q("select id from companies where is_demo and created_at < now() - make_interval(days => $1) limit 20", [Number(sys.demo_days) || 7]);
   for (const r of old.rows) await tx((db) => db.query('select purge_demo_company($1)', [r.id])).catch(() => {});
-  const rand = randomToken(6).toLowerCase().replace(/[^a-z0-9]/g, 'x');
   const out = await tx(async (db) => {
     const c = await db.query(
       `insert into companies (name, segment, email, settings, is_demo) values ('Bar Demonstração', 'bar', null, $1, true) returning id, timezone`,
@@ -137,13 +149,13 @@ router.post('/demo', h(async (req, res) => {
         [companyId, r.key, r.name, r.level, r.permissions]);
     }
     const u = await db.query(
-      `insert into users (company_id, name, email, password_hash, role_key) values ($1,'Visitante',$2,$3,'owner') returning id`,
-      [companyId, `demo-${rand}@demo.rusten.app`, await bcrypt.hash(randomToken(24), 8)]);
+      `insert into users (company_id, name, email, password_hash, role_key) values ($1,$2,$3,$4,'owner') returning id`,
+      [companyId, b.name, b.email, hash]);
     const { unitId } = await seedCompany(db, companyId, { unit_name: 'Matriz', tables: 12, cards: 30, demo: true, day_cutoff: 5 });
     await seedDemoActivity(db, companyId, unitId, u.rows[0].id, businessDate(new Date(), c.rows[0].timezone, 5));
     await audit(db, { companyId, userId: u.rows[0].id }, 'demonstracao.criada', { entity: 'company', entityId: companyId });
     return { companyId, userId: u.rows[0].id };
-  });
+  }).catch((e) => { if (e.code === '23505') throw new HttpError(409, 'Este e-mail já está cadastrado. Use "Entrar" ou recupere a senha.', 'email_taken'); throw e; });
   sendTokens(req, res, await startSession({ id: out.userId, company_id: out.companyId }, req), 201);
 }));
 
@@ -249,7 +261,7 @@ router.post('/forgot', h(async (req, res) => {
   try { await rateLimit(`forgot-user:${b.email}`, 3, 3600); } catch { return res.json(GENERIC_FORGOT); }
   const u = (await q(`select u.id, u.name, u.email, u.company_id, c.name as company_name, c.is_demo from users u join companies c on c.id = u.company_id
      where lower(u.email) = $1 and u.active`, [b.email])).rows[0];
-  if (!u || u.is_demo) return res.json(GENERIC_FORGOT);
+  if (!u || (u.is_demo && u.email.endsWith('@demo.rusten.app'))) return res.json(GENERIC_FORGOT); // demonstrações antigas tinham e-mail fictício
   const token = randomToken(32);
   await q('update password_resets set used_at = now() where user_id = $1 and used_at is null', [u.id]);
   await q(`insert into password_resets (user_id, token_hash, expires_at, ip) values ($1,$2, now() + make_interval(mins => $3), $4)`,

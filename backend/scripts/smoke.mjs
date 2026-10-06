@@ -498,9 +498,27 @@ await check('central cria senha provisória do responsável', async () => {
 await check('usuário comum não acessa rotas da central', async () => {
   assert.equal((await api('GET', '/api/platform/v1/tenants')).status, 401);
 });
-await check('demonstração: entra direto, com movimento de exemplo, sem central e fora da lista da central', async () => {
-  const r = await anon('POST', '/api/auth/demo');
+const demoBody = (email, extra = {}) => ({ name: 'Visitante Teste', email, password: 'Demonstra2026xyz', accept_terms: true, ...extra });
+await check('demonstração exige nome, e-mail e senha válidos (sem credenciais não cria conta)', async () => {
+  const before = (await pool.query('select count(*)::int as n from companies where is_demo')).rows[0].n;
+  for (const body of [undefined, {}, demoBody('sem-arroba'), demoBody('d1@teste.dev', { password: 'curta1' }), demoBody('d1@teste.dev', { password: 'somenteletrasaqui' }),
+    demoBody('d1@teste.dev', { accept_terms: false }), demoBody('d1@teste.dev', { name: '' }), demoBody('x@demo.rusten.app')]) {
+    const r = await anon('POST', '/api/auth/demo', body, { 'x-forwarded-for': '10.250.0.1' }); // IP próprio: o limite por IP continua valendo
+    assert.equal(r.status, 400, JSON.stringify([body, r.data]));
+  }
+  assert.equal((await anon('POST', '/api/auth/demo', demoBody('a@teste.dev'), { 'x-forwarded-for': '10.250.0.1' })).status, 409); // e-mail já usado
+  assert.equal((await anon('POST', '/api/auth/demo', demoBody('d2@teste.dev'), { 'x-forwarded-for': '10.250.0.1' })).status, 201);
+  assert.equal((await anon('POST', '/api/auth/demo', demoBody('d3@teste.dev'), { 'x-forwarded-for': '10.250.0.1' })).status, 429); // limite por IP mantido
+  assert.equal((await pool.query('select count(*)::int as n from companies where is_demo')).rows[0].n, before + 1);
+});
+await check('demonstração: login próprio, com movimento de exemplo, sem central e fora da lista da central', async () => {
+  const r = await anon('POST', '/api/auth/demo', demoBody('Visitante.Demo@Teste.dev'));
   assert.equal(r.status, 201, JSON.stringify(r.data));
+  // volta pelo login normal com o que cadastrou
+  const back = await anon('POST', '/api/auth/login', { email: 'visitante.demo@teste.dev', password: 'Demonstra2026xyz' });
+  assert.equal(back.status, 200, JSON.stringify(back.data));
+  assert.equal((await client(back.data.access_token)('GET', '/api/auth/me')).data.company.is_demo, true);
+  assert.equal((await anon('POST', '/api/auth/demo', demoBody('visitante.demo@teste.dev'))).status, 409);
   const d = client(r.data.access_token);
   const me = (await d('GET', '/api/auth/me')).data;
   assert.equal(me.company.is_demo, true); assert.equal(me.access.state, 'DEMO');
@@ -520,17 +538,17 @@ await check('demonstração: entra direto, com movimento de exemplo, sem central
   assert.equal((await anon('POST', '/api/auth/login', { email: 'demo-ativo@teste.dev', password: 'Ativacao2026xyz' })).status, 200);
 });
 await check('demonstração antiga é apagada por inteiro (inclusive auditoria)', async () => {
-  const r = await anon('POST', '/api/auth/demo');
+  const r = await anon('POST', '/api/auth/demo', demoBody('demo-velha@teste.dev'));
   const me = (await client(r.data.access_token)('GET', '/api/auth/me')).data;
   await pool.query("update companies set created_at = now() - interval '30 days' where id = $1", [me.company.id]);
-  await anon('POST', '/api/auth/demo');
+  await anon('POST', '/api/auth/demo', demoBody('demo-nova@teste.dev'));
   assert.equal((await pool.query('select 1 from companies where id = $1', [me.company.id])).rows.length, 0);
   assert.equal((await pool.query('select 1 from audit_events where company_id = $1', [me.company.id])).rows.length, 0);
   await assert.rejects(pool.query('select purge_demo_company($1)', [A.me.company.id]), /não é de demonstração/);
 });
 await check('parâmetro do sistema fecha cadastros e demonstração', async () => {
   await centralCall('PUT', '/settings', { values: { signup_enabled: false, demo_enabled: false } });
-  assert.equal((await anon('POST', '/api/auth/demo')).status, 403);
+  assert.equal((await anon('POST', '/api/auth/demo', demoBody('fechado@teste.dev'))).status, 403);
   const plans = await anon('GET', '/api/auth/plans');
   assert.equal(plans.data.signup_open, false); assert.equal(plans.data.hub, true); assert.equal(plans.data.plans.length, 1);
   const r = await anon('POST', '/api/auth/register', { company: { name: 'Fechado', segment: 'bar' }, owner: { name: 'X Y', email: 'f@teste.dev', password: 'Motocustom2026x' }, accept_terms: true });

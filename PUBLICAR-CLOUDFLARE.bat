@@ -3,6 +3,9 @@ chcp 65001 >nul
 title RUSTEN - publicar na Cloudflare (lorler.com.br)
 setlocal EnableExtensions
 cd /d "%~dp0"
+rem chamado por PUBLICAR-TUDO (ou com "semPausa"): segue direto, sem esperar tecla
+set "PAUSA=pause"
+if /i "%~1"=="semPausa" set "PAUSA=ver >nul"
 rem ============================================================================
 rem  Publica a branch "cloudflare" do RUSTEN:
 rem    - envia a branch ao GitHub (a branch main NAO e alterada)
@@ -16,19 +19,21 @@ set "KEYS=%USERPROFILE%\.plataforma-cloudflare"
 set "LOG=%~dp0publicar-cloudflare.log"
 if exist "%~dp0..\node-v24.20.0-win-x64\node.exe" set "PATH=%~dp0..\node-v24.20.0-win-x64;%PATH%"
 rem o npm global deste Windows esta corrompido: npm/npx passam a chamar direto o npm que vem junto com o Node
+rem auxiliar do npm numa pasta so desta execucao: varios .bat ao mesmo tempo nao se atrapalham
+set "SHIM=%TEMP%\npm-shim-%~n0-%RANDOM%%RANDOM%"
 set "NODEDIR="
 for %%D in ("%~dp0..\node-v24.20.0-win-x64" "%~dp0..\node-v24.20.0-win-x64\node-v24.20.0-win-x64") do if not defined NODEDIR if exist "%%~D\node_modules\npm\bin\npm-cli.js" set "NODEDIR=%%~D"
 if not defined NODEDIR for /f "delims=" %%N in ('where node 2^>nul') do if not defined NODEDIR if exist "%%~dpNnode_modules\npm\bin\npm-cli.js" set "NODEDIR=%%~dpN."
-if defined NODEDIR if not exist "%TEMP%\npm-shim" mkdir "%TEMP%\npm-shim"
-if defined NODEDIR >"%TEMP%\npm-shim\npm.cmd" echo @"%NODEDIR%\node.exe" "%NODEDIR%\node_modules\npm\bin\npm-cli.js" %%*
-if defined NODEDIR >"%TEMP%\npm-shim\npx.cmd" echo @"%NODEDIR%\node.exe" "%NODEDIR%\node_modules\npm\bin\npx-cli.js" %%*
-if defined NODEDIR set "PATH=%TEMP%\npm-shim;%NODEDIR%;%PATH%"
+if defined NODEDIR if not exist "%SHIM%" mkdir "%SHIM%"
+if defined NODEDIR >"%SHIM%\npm.cmd" echo @"%NODEDIR%\node.exe" "%NODEDIR%\node_modules\npm\bin\npm-cli.js" %%*
+if defined NODEDIR >"%SHIM%\npx.cmd" echo @"%NODEDIR%\node.exe" "%NODEDIR%\node_modules\npm\bin\npx-cli.js" %%*
+if defined NODEDIR set "PATH=%SHIM%;%NODEDIR%;%PATH%"
 if not defined NODEDIR echo   Aviso: npm do Node nao encontrado; usando o npm do sistema.
 if defined NODEDIR echo   Node usado: %NODEDIR%
 echo [%date% %time%] inicio > "%LOG%"
-where git >nul 2>nul || (echo Git nao encontrado. Instale em https://git-scm.com/download/win & pause & exit /b 1)
-where node >nul 2>nul || (echo Node nao encontrado. & pause & exit /b 1)
-git rev-parse --verify cloudflare >nul 2>nul || (echo A branch "cloudflare" nao existe neste repositorio. & pause & exit /b 1)
+where git >nul 2>nul || (echo Git nao encontrado. Instale em https://git-scm.com/download/win & %PAUSA% & exit /b 1)
+where node >nul 2>nul || (echo Node nao encontrado. & %PAUSA% & exit /b 1)
+git rev-parse --verify cloudflare >nul 2>nul || (echo A branch "cloudflare" nao existe neste repositorio. & %PAUSA% & exit /b 1)
 rem ---- backup automatico da versao que sera publicada (D:\Programacao\BACKUP-Sistemas; nunca sobrescreve) ----
 set "BKP_NODE=node"
 if exist "%~dp0..\node-v24.20.0-win-x64\node.exe" set "BKP_NODE=%~dp0..\node-v24.20.0-win-x64\node.exe"
@@ -36,7 +41,7 @@ if exist "%~dp0..\node-v24.20.0-win-x64\node-v24.20.0-win-x64\node.exe" set "BKP
 echo.
 echo  Backup do RUSTEN antes de publicar...
 "%BKP_NODE%" "%~dp0backup-sistema.mjs" --sistema RUSTEN --repo "%~dp0." --ref cloudflare --destino "D:\Programacao\BACKUP-Sistemas"
-if errorlevel 1 (echo   O backup falhou: a publicacao foi cancelada para nao publicar sem copia de seguranca. & pause & exit /b 1)
+if errorlevel 1 (echo   O backup falhou: a publicacao foi cancelada para nao publicar sem copia de seguranca. & %PAUSA% & exit /b 1)
 if not exist "%KEYS%" mkdir "%KEYS%"
 
 echo.
@@ -50,17 +55,17 @@ echo  [2/5] Preparando a copia de trabalho da branch cloudflare...
 rem copia sem prender a branch (assim a branch cloudflare pode receber atualizacoes); sempre na versao mais nova
 rem (arquivos gerados no build anterior vao para um stash da copia de trabalho)
 if not exist "%WT%\.git" (
-  git worktree add --detach "%WT%" cloudflare >> "%LOG%" 2>&1 || (echo   Falhou. Veja %LOG% & pause & exit /b 1)
+  git worktree add --detach "%WT%" cloudflare >> "%LOG%" 2>&1 || (echo   Falhou. Veja %LOG% & %PAUSA% & exit /b 1)
 ) else (
   git -C "%WT%" stash push -q --include-untracked >> "%LOG%" 2>&1
-  git -C "%WT%" checkout -q --detach cloudflare >> "%LOG%" 2>&1 || (echo   Falhou ao atualizar a copia. Veja %LOG% & pause & exit /b 1)
+  git -C "%WT%" checkout -q --detach cloudflare >> "%LOG%" 2>&1 || (echo   Falhou ao atualizar a copia. Veja %LOG% & %PAUSA% & exit /b 1)
 )
 echo   %WT%
 
 echo  [3/5] Gerando o site...
 pushd "%WT%\frontend"
-call npm ci --no-audit --no-fund >> "%LOG%" 2>&1 || (echo   npm ci falhou. Veja %LOG% & popd & pause & exit /b 1)
-call npm run build:cloudflare >> "%LOG%" 2>&1 || (echo   build falhou. Veja %LOG% & popd & pause & exit /b 1)
+call npm ci --no-audit --no-fund >> "%LOG%" 2>&1 || (echo   npm ci falhou. Veja %LOG% & popd & %PAUSA% & exit /b 1)
+call npm run build:cloudflare >> "%LOG%" 2>&1 || (echo   build falhou. Veja %LOG% & popd & %PAUSA% & exit /b 1)
 popd
 echo   OK
 echo  Carregadora da API (busca o pacote no site novo, com o antigo como reserva)...
@@ -68,8 +73,8 @@ rem a carregadora da Edge Function rusten-api ja e publicada pelo administrador;
 
 echo  [4/5] API "rusten-api-cf" (pacote embutido) e chave do repasse do IP...
 pushd "%WT%\backend"
-call npm ci --no-audit --no-fund >> "%LOG%" 2>&1 || (echo   npm ci da API falhou. Veja %LOG% & popd & pause & exit /b 1)
-call npm run build:edge >> "%LOG%" 2>&1 || (echo   build da API falhou. Veja %LOG% & popd & pause & exit /b 1)
+call npm ci --no-audit --no-fund >> "%LOG%" 2>&1 || (echo   npm ci da API falhou. Veja %LOG% & popd & %PAUSA% & exit /b 1)
+call npm run build:edge >> "%LOG%" 2>&1 || (echo   build da API falhou. Veja %LOG% & popd & %PAUSA% & exit /b 1)
 popd
 if not exist "%KEYS%\edge-dwfb.key" node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" > "%KEYS%\edge-dwfb.key"
 call npx --yes supabase@2 projects list >nul 2>&1 || (
@@ -81,7 +86,7 @@ call npx --yes supabase@2 secrets set EDGE_PROXY_KEY=%EK% --project-ref %REF% >>
 set "EK="
 pushd "%WT%\backend"
 call npx --yes supabase@2 functions deploy rusten-api-cf --project-ref %REF% --no-verify-jwt --use-api >> "%LOG%" 2>&1
-if errorlevel 1 (echo   Falhou a publicacao da API. Veja %LOG% & popd & pause & exit /b 1)
+if errorlevel 1 (echo   Falhou a publicacao da API. Veja %LOG% & popd & %PAUSA% & exit /b 1)
 popd
 echo   API OK
 
@@ -94,7 +99,7 @@ call npx wrangler whoami >nul 2>&1 || (
 call npx wrangler deploy -c ..\cloudflare\wrangler.jsonc --domain rusten.lorler.com.br >> "%LOG%" 2>&1
 if errorlevel 1 (
   echo   rusten.lorler.com.br ainda nao disponivel - publicando no endereco workers.dev
-  call npx wrangler deploy -c ..\cloudflare\wrangler.jsonc >> "%LOG%" 2>&1 || (echo   Falhou. Veja %LOG% & popd & pause & exit /b 1)
+  call npx wrangler deploy -c ..\cloudflare\wrangler.jsonc >> "%LOG%" 2>&1 || (echo   Falhou. Veja %LOG% & popd & %PAUSA% & exit /b 1)
 ) else (echo   rusten.lorler.com.br OK)
 type "%KEYS%\edge-dwfb.key" | npx wrangler secret put EDGE_PROXY_KEY -c ..\cloudflare\wrangler.jsonc >> "%LOG%" 2>&1
 popd
@@ -106,5 +111,5 @@ echo.
 echo  Pronto. Teste em https://rusten.lorler.com.br/entrar (ou no endereco *.workers.dev acima).
 echo  Detalhes: %LOG%
 echo [%date% %time%] fim >> "%LOG%"
-pause
+%PAUSA%
 exit /b 0

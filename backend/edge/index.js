@@ -1291,7 +1291,7 @@ n)}function qa(e,a){let t=Math.floor(e/a),n=e-t*a;return Array.from({length:a},(
 year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",hourCycle:"h23"}).formatToParts(e),o=s=>n.find(r=>r.type===s).value,i=new Date(Date.UTC(+o("year"),+o("month")-1,+o("day")));
 return+o("hour")<t&&(i=new Date(i.getTime()-864e5)),i.toISOString().slice(0,10)}var qe=e=>Rn.createHash("sha256").update(String(e)).digest("hex"),Se=(e=32)=>Rn.randomBytes(e).toString(
 "base64url");function Dn(e,a){let t=Ca.from(String(e)),n=Ca.from(String(a));return t.length===n.length&&Rn.timingSafeEqual(t,n)}function vt(e){let a=e==null?"":String(e);return/^[=+\-@\t\r]/.
-test(a)&&(a=`'${a}`),/[";\n]/.test(a)?`"${a.replace(/"/g,'""')}"`:a}import Ai from"node:crypto";import{Buffer as Va}from"node:buffer";import Ha from"npm:jsonwebtoken@9.0.3";var _t={"pdv.lancar":"Lan\xE7ar itens","pdv.lancamento_manual":"Lan\xE7amento manual (busca, cat\xE1logo, c\xF3digo digitado)","pdv.alterar_modo":"Trocar modo de leitura no PDV","p\
+test(a)&&(a=`'${a}`),/[";\n]/.test(a)?`"${a.replace(/"/g,'""')}"`:a}import Ai from"node:crypto";import{Buffer as Va}from"node:buffer";import Ha from"npm:jsonwebtoken@9.0.3";var pt={"pdv.lancar":"Lan\xE7ar itens","pdv.lancamento_manual":"Lan\xE7amento manual (busca, cat\xE1logo, c\xF3digo digitado)","pdv.alterar_modo":"Trocar modo de leitura no PDV","p\
 dv.excecao_dupla_leitura":"Exce\xE7\xE3o manual na dupla leitura obrigat\xF3ria","pdv.autorizar":"Autorizar opera\xE7\xF5es de outros usu\xE1rios (gerente)","pdv.abrir_comanda":"Ab\
 rir comanda/mesa/balc\xE3o","pdv.alterar_quantidade":"Alterar quantidade na leitura","pdv.alterar_preco":"Alterar pre\xE7o do item","pdv.desconto":"Conceder desconto","pdv.cancelar\
 _item":"Cancelar item","pdv.cancelar_venda":"Cancelar consumo inteiro","pdv.transferir_item":"Transferir itens e consumos","pdv.reabrir_comanda":"Reabrir consumo encerrado","pdv.re\
@@ -1303,7 +1303,7 @@ e margem","usuarios.gerenciar":"Gerenciar usu\xE1rios e perfis","configuracoes.g
 ualizar":"Ver auditoria","dados.pessoais":"Ver dados pessoais de clientes","clientes.visualizar":"Ver clientes","clientes.gerenciar":"Cadastrar e editar clientes, pontos e consenti\
 mentos","cozinha.operar":"Operar a fila de produ\xE7\xE3o (KDS)","delivery.gerenciar":"Gerenciar pedidos de delivery e retirada","delivery.entregar":"Registrar sa\xEDda e entrega de p\
 edidos","estoque.visualizar":"Ver estoque e fichas t\xE9cnicas","compras.gerenciar":"Registrar compras e recebimentos","marketing.gerenciar":"Campanhas e avalia\xE7\xF5es","agente.\
-gerenciar":"Configurar o agente de atendimento","agente.atender":"Atender conversas da caixa de entrada"},Oa=Object.keys(_t),Ea=(...e)=>Oa.filter(a=>!e.includes(a)),Mn=[{key:"owner",
+gerenciar":"Configurar o agente de atendimento","agente.atender":"Atender conversas da caixa de entrada"},Oa=Object.keys(pt),Ea=(...e)=>Oa.filter(a=>!e.includes(a)),Mn=[{key:"owner",
 name:"Propriet\xE1rio",level:100,permissions:Oa},{key:"admin",name:"Administrador",level:90,permissions:Ea("assinatura.gerenciar")},{key:"gerente",name:"Gerente",level:70,permissions:Ea(
 "assinatura.gerenciar","usuarios.gerenciar","configuracoes.gerenciar")},{key:"caixa",name:"Caixa",level:40,permissions:["pdv.lancar","pdv.lancamento_manual","pdv.abrir_comanda","pd\
 v.receber","caixa.abrir","caixa.fechar","caixa.sangria","caixa.suprimento","salao.visualizar","cardapio.visualizar","clientes.visualizar","clientes.gerenciar"]},{key:"garcom",name:"\
@@ -1391,14 +1391,15 @@ count, reset_at) values ($1, 1, now() + make_interval(secs => $2))
      on conflict (key) do update set
        count = case when rate_limits.reset_at < now() then 1 else rate_limits.count + 1 end,
        reset_at = case when rate_limits.reset_at < now() then now() + make_interval(secs => $2) else rate_limits.reset_at end
-     returning count`,[e,t]);if(n[0].count>a)throw new z(429,"Muitas tentativas. Aguarde alguns minutos.","rate_limited")}import Ya from"node:fs";import on from"node:path";import{fileURLToPath as Qa}from"node:url";var Za=import.meta.url.startsWith("file:")?on.join(on.dirname(Qa(import.meta.url)),"migrations"):"migrations";async function Ft({log:e=console.log}={}){let a=await xt.connect();try{
-await a.query("select pg_advisory_lock(424242)"),await a.query(`create table if not exists schema_migrations (
-      name text primary key, applied_at timestamptz not null default now())`);let t=new Set((await a.query("select name from schema_migrations")).rows.map(o=>o.name)),n=R.EDGE_RUNTIME?
-(await Promise.resolve().then(()=>(Xa(),Ka))).MIGRATIONS:Ya.readdirSync(Za).filter(o=>/^\d+_.+\.sql$/.test(o)).sort().map(o=>({name:o,sql:null}));for(let{name:o,sql:i}of n){if(t.has(
-o))continue;let s=i??Ya.readFileSync(on.join(Za,o),"utf8");await a.query("begin");try{await a.query(s),await a.query("insert into schema_migrations(name) values ($1)",[o]),await a.
-query("commit"),e(`migra\xE7\xE3o aplicada: ${o}`)}catch(r){throw await a.query("rollback"),new Error(`falha na migra\xE7\xE3o ${o}: ${r.message}`)}}}finally{await a.query("select \
-pg_advisory_unlock(424242)").catch(()=>{}),a.release()}}!R.EDGE_RUNTIME&&process.argv[1]&&Qa(import.meta.url)===on.resolve(process.argv[1])&&Ft().then(()=>xt.end()).catch(e=>{console.
-error(e.message),process.exit(1)});import{Router as as}from"npm:express@5.2.1";import{Buffer as Li}from"node:buffer";import{Router as Ui}from"npm:express@5.2.1";import{z as X}from"npm:zod@4.6.5";var st=Ui(),to={logo:400*1024,fundo:1600*1024,tv_fundo:1600*1024},Hn=e=>{if(!Object.prototype.hasOwnProperty.call(to,e))throw v("Imagem n\xE3o encontrada");return e};function Fi(e,a){
+     returning count`,[e,t]);if(n[0].count>a)throw new z(429,"Muitas tentativas. Aguarde alguns minutos.","rate_limited")}import Ya from"node:fs";import on from"node:path";import{fileURLToPath as Qa}from"node:url";var Za=import.meta.url.startsWith("file:")?on.join(on.dirname(Qa(import.meta.url)),"migrations"):"migrations";async function Ft({log:e=console.log}={}){let a=R.EDGE_RUNTIME?(await Promise.resolve().then(()=>(Xa(),Ka))).
+MIGRATIONS:Ya.readdirSync(Za).filter(o=>/^\d+_.+\.sql$/.test(o)).sort().map(o=>({name:o,sql:null})),t=await xt.connect(),n=!1;try{try{let i=a.map(r=>r.name),{rows:[s]}=await t.query(
+"select count(*)::int as n from schema_migrations where name = any($1::text[])",[i]);if(s.n===i.length)return}catch{}await t.query("select pg_advisory_lock(424242)"),n=!0,await t.query(
+`create table if not exists schema_migrations (
+      name text primary key, applied_at timestamptz not null default now())`);let o=new Set((await t.query("select name from schema_migrations")).rows.map(i=>i.name));for(let{name:i,
+sql:s}of a){if(o.has(i))continue;let r=s??Ya.readFileSync(on.join(Za,i),"utf8");await t.query("begin");try{await t.query(r),await t.query("insert into schema_migrations(name) value\
+s ($1)",[i]),await t.query("commit"),e(`migra\xE7\xE3o aplicada: ${i}`)}catch(c){throw await t.query("rollback"),new Error(`falha na migra\xE7\xE3o ${i}: ${c.message}`)}}}finally{n&&
+await t.query("select pg_advisory_unlock(424242)").catch(()=>{}),t.release()}}!R.EDGE_RUNTIME&&process.argv[1]&&Qa(import.meta.url)===on.resolve(process.argv[1])&&Ft().then(()=>xt.
+end()).catch(e=>{console.error(e.message),process.exit(1)});import{Router as as}from"npm:express@5.2.1";import{Buffer as Li}from"node:buffer";import{Router as Ui}from"npm:express@5.2.1";import{z as X}from"npm:zod@4.6.5";var st=Ui(),to={logo:400*1024,fundo:1600*1024,tv_fundo:1600*1024},Hn=e=>{if(!Object.prototype.hasOwnProperty.call(to,e))throw v("Imagem n\xE3o encontrada");return e};function Fi(e,a){
 let t=/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(e||""));if(!t)throw f("Envie uma imagem JPG, PNG ou WebP");let n=Li.from(t[2],"base64");if(n.length>a)
 throw f(`Imagem grande demais (m\xE1x. ${Math.round(a/1024)} KB). Use uma imagem menor.`);let o=n.subarray(0,4).toString("hex");if(!{"image/png":o.startsWith("89504e47"),"image/jpe\
 g":o.startsWith("ffd8"),"image/webp":n.subarray(8,12).toString()==="WEBP"}[t[1]])throw f("O conte\xFAdo do arquivo n\xE3o \xE9 uma imagem v\xE1lida");return n.length}async function Bt(e,a){
@@ -1417,7 +1418,7 @@ data_url,to[t]);await d(`insert into company_assets (company_id, kind, data_url,
            on conflict (company_id, kind) do update set data_url = excluded.data_url, bytes = excluded.bytes, updated_at = now()`,[e.ctx.companyId,t,e.body.data_url,n]),await g({query:d},
 e.ctx,"marca.imagem",{entity:"company",entityId:e.ctx.companyId,data:{kind:t,bytes:n}}),a.json(await Bt({query:d},e.ctx.companyId))}));st.delete("/:kind",y("configuracoes.gerenciar"),
 p(async(e,a)=>{let t=Hn(e.params.kind);await d("delete from company_assets where company_id = $1 and kind = $2",[e.ctx.companyId,t]),await g({query:d},e.ctx,"marca.imagem_removida",
-{entity:"company",entityId:e.ctx.companyId,data:{kind:t}}),a.json(await Bt({query:d},e.ctx.companyId))}));import dt from"npm:bcryptjs@3.0.3";import os from"node:crypto";import{z as A}from"npm:zod@4.6.5";var Vi=["scanner_enabled","allow_manual","allow_manual_exception","allow_mode_change","open_free_card_on_scan"],Hi=["double_read_mandatory","exception_requires_manager","require_op\
+{entity:"company",entityId:e.ctx.companyId,data:{kind:t}}),a.json(await Bt({query:d},e.ctx.companyId))}));import yt from"npm:bcryptjs@3.0.3";import os from"node:crypto";import{z as A}from"npm:zod@4.6.5";var Vi=["scanner_enabled","allow_manual","allow_manual_exception","allow_mode_change","open_free_card_on_scan"],Hi=["double_read_mandatory","exception_requires_manager","require_op\
 en_cash"],Gi=["max_qty_per_scan"];function Gn(e={},a={},t={}){let n=[Qt,e||{},a||{},t||{}],o={...Qt};for(let i of n.slice(1))for(let[s,r]of Object.entries(i))!(s in Qt)||r===void 0||
 r===null||(Vi.includes(s)?o[s]=o[s]&&!!r:Hi.includes(s)?o[s]=o[s]||!!r:Gi.includes(s)?o[s]=Math.min(o[s],Number(r)):o[s]=r);return o.double_read_mandatory&&(o.mode="dupla"),o.scanner_enabled||
 (o.mode="manual"),!o.scanner_enabled&&!o.allow_manual&&(o.allow_manual=!0),o.qty_per_scan=Math.min(Math.max(1,Number(o.qty_per_scan)||1),o.max_qty_per_scan),o}function Nt(e){if(e.scanner_enabled===
@@ -1425,8 +1426,8 @@ r===null||(Vi.includes(s)?o[s]=o[s]&&!!r:Hi.includes(s)?o[s]=o[s]||!!r:Gi.includ
 la"].includes(e.mode))throw f("Modo inv\xE1lido");if(e.double_read_mandatory&&e.scanner_enabled===!1)throw f("Dupla leitura obrigat\xF3ria exige o leitor habilitado.");if(e.product_timeout_s!=
 null&&(e.product_timeout_s<3||e.product_timeout_s>120))throw f("Tempo de espera do produto deve ficar entre 3 e 120 segundos")}async function Ye(e,a,t){let n=await e.query("select \
 settings from companies where id = $1",[a.companyId]),o=t?await e.query("select settings from units where id = $1 and company_id = $2",[t,a.companyId]):{rows:[]},i=a.terminalId?await e.
-query("select settings from terminals where id = $1",[a.terminalId]):{rows:[]};return Gn(n.rows[0]?.settings?.pdv,o.rows[0]?.settings?.pdv,i.rows[0]?.settings?.pdv)}var yt=e=>String(
-e??"").replace(/[\r\n\t]/g,"").trim();async function Vt(e,a,t){let n=yt(t);if(!n)return{type:"DESCONHECIDO",code:n};if(n.length>128)return{type:"DESCONHECIDO",code:n.slice(0,128)};
+query("select settings from terminals where id = $1",[a.terminalId]):{rows:[]};return Gn(n.rows[0]?.settings?.pdv,o.rows[0]?.settings?.pdv,i.rows[0]?.settings?.pdv)}var _t=e=>String(
+e??"").replace(/[\r\n\t]/g,"").trim();async function Vt(e,a,t){let n=_t(t);if(!n)return{type:"DESCONHECIDO",code:n};if(n.length>128)return{type:"DESCONHECIDO",code:n.slice(0,128)};
 let{rows:o}=await e.query("select entity, entity_id from scan_codes where company_id = $1 and code = $2",[a,n]);if(!o[0])return{type:"DESCONHECIDO",code:n};let{entity:i,entity_id:s}=o[0];
 if(i==="PRODUTO"){let r=await e.query(`select p.id, p.name, p.price_cents, p.kind, p.unit, p.active,
               exists(select 1 from modifier_groups g where g.product_id = p.id) as has_options,
@@ -1437,7 +1438,7 @@ query(`select c.id, c.number, c.unit_id, c.status, c.block_reason,
               (select s.status from consumption_sessions s where s.card_id = c.id and s.status in ('aberta','em_fechamento') limit 1) as session_status
          from tab_cards c where c.id = $1 and c.company_id = $2`,[s,a]);return r.rows[0]?{type:"COMANDA",code:n,card:r.rows[0]}:{type:"DESCONHECIDO",code:n}}if(i==="MESA"){let r=await e.
 query("select id, number, unit_id, status, area from dining_tables where id = $1 and company_id = $2",[s,a]);return r.rows[0]?{type:"MESA",code:n,table:r.rows[0]}:{type:"DESCONHECI\
-DO",code:n}}return{type:i,code:n,id:s}}async function rt(e,a,t,n,o){let i=yt(t);if(!i)throw f("C\xF3digo vazio");if(i.length>128)throw f("C\xF3digo muito longo");let s=await e.query(
+DO",code:n}}return{type:i,code:n,id:s}}async function rt(e,a,t,n,o){let i=_t(t);if(!i)throw f("C\xF3digo vazio");if(i.length>128)throw f("C\xF3digo muito longo");let s=await e.query(
 "select entity, entity_id from scan_codes where company_id = $1 and code = $2",[a,i]);if(s.rows[0]){if(s.rows[0].entity===n&&Number(s.rows[0].entity_id)===Number(o))return;throw b(
 `C\xF3digo ${i} j\xE1 est\xE1 em uso (${s.rows[0].entity.toLowerCase()} ${s.rows[0].entity_id}). Cadastros amb\xEDguos n\xE3o s\xE3o permitidos.`,"code_in_use")}await e.query("inse\
 rt into scan_codes (company_id, code, entity, entity_id) values ($1,$2,$3,$4)",[a,i,n,o])}var no=(e,a,t)=>`${e}${a>1?`${a}-`:""}${String(t).padStart(6,"0")}`;async function se(e,a,t){
@@ -1555,7 +1556,7 @@ quisi\xE7\xE3o n\xE3o informada.","csrf");let t;try{t=new URL(a).host}catch{thro
 "").split(",").map(s=>s.trim()).filter(Boolean),i=R.NODE_ENV!=="production"&&/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(t);if(!(n&&t===n)&&!o.includes(a)&&!i)throw new z(403,"Origem \
 n\xE3o autorizada.","csrf")}var yo=(e,a)=>`${_o}=${e?encodeURIComponent(e):""}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${a}`;function zt(e,a,t,n=200){if(!St(e))return a.
 status(n).json(t);let{refresh_token:o,...i}=t;return a.append("Set-Cookie",yo(o,an*86400)),a.set("Cache-Control","no-store"),a.status(n).json({...i,session:"cookie"})}function Zn(e){
-e.append("Set-Cookie",yo("",0))}function fo(e){let a=String(e.body?.refresh_token||"");return St(e)&&ns(e),a||(St(e)?String(ts(e)||""):"")}var ve=as(),is=["12345678","senha123","password","qwerty","123456789","rusten123","abc12345"];function mt(e){if(e.length<10)throw f("A senha precisa ter pelo menos 10 caracteres");
+e.append("Set-Cookie",yo("",0))}function fo(e){let a=String(e.body?.refresh_token||"");return St(e)&&ns(e),a||(St(e)?String(ts(e)||""):"")}var ve=as(),is=["12345678","senha123","password","qwerty","123456789","rusten123","abc12345"];function dt(e){if(e.length<10)throw f("A senha precisa ter pelo menos 10 caracteres");
 if(!/[a-zA-Z]/.test(e)||!/\d/.test(e))throw f("A senha precisa ter letras e n\xFAmeros");if(is.some(a=>e.toLowerCase().includes(a)))throw f("Senha muito comum")}var ss=["bar","rest\
 aurante","lanchonete","cafeteria","pub","food_truck","hamburgueria","pizzaria","padaria","outro"],rs=A.object({company:A.object({name:A.string().trim().min(2).max(120),segment:A.enum(
 ss).default("restaurante"),document:A.string().trim().max(20).optional(),phone:A.string().trim().max(30).optional(),email:A.string().trim().email().max(160).optional(),address:A.object(
@@ -1564,9 +1565,9 @@ ss).default("restaurante"),document:A.string().trim().max(20).optional(),phone:A
 ceitar os termos"}),plan:A.object({code:A.string().max(60).optional(),cycle:A.enum(["mensal","anual"]).optional(),trial:A.boolean().optional()}).optional(),setup:A.object({unit_name:A.
 string().trim().max(80).optional(),tables:A.number().int().min(0).max(300).default(10),cards:A.number().int().min(0).max(2e3).default(50),mode:A.enum(["manual","continua","dupla"]).
 default("manual"),demo:A.boolean().default(!1),day_cutoff:A.number().int().min(0).max(12).default(5)}).default({})});ve.post("/register",p(async(e,a)=>{let t=await Ze();if(R.ALLOW_SIGNUP===
-"false"||t.signup_enabled===!1)throw new z(403,"Novos cadastros est\xE3o temporariamente fechados","signup_closed");await ae(`register:${e.ip}`,10,3600);let n=w(rs,e.body);if(mt(n.
+"false"||t.signup_enabled===!1)throw new z(403,"Novos cadastros est\xE3o temporariamente fechados","signup_closed");await ae(`register:${e.ip}`,10,3600);let n=w(rs,e.body);if(dt(n.
 owner.password),(await d("select 1 from users where lower(email) = $1",[n.owner.email])).rows[0])throw new z(409,'Este e-mail j\xE1 est\xE1 cadastrado. Use "Entrar" ou recupere a senha.',
-"email_taken");let i=await dt.hash(n.owner.password,12),s=await k(async c=>{let u=(await c.query(`insert into companies (name, segment, document, phone, email, address, settings)
+"email_taken");let i=await yt.hash(n.owner.password,12),s=await k(async c=>{let u=(await c.query(`insert into companies (name, segment, document, phone, email, address, settings)
        values ($1,$2,$3,$4,$5,$6,$7) returning id`,[n.company.name,n.company.segment,n.company.document??null,n.company.phone??null,n.company.email??n.owner.email,n.company.address??
 {},{pdv:{mode:n.setup.mode,service_fee_bp:Math.round(Number(t.default_service_fee??10)*100)},plan_request:n.plan??null}])).rows[0].id;for(let h of Mn)await c.query("insert into rol\
 es (company_id, key, name, level, permissions, system) values ($1,$2,$3,$4,$5,true)",[u,h.key,h.name,h.level,h.permissions]);let l=await c.query("insert into users (company_id, nam\
@@ -1574,17 +1575,17 @@ e, email, password_hash, role_key) values ($1,$2,$3,$4,'owner') returning id",[u
 c,_,"empresa.cadastrada",{entity:"company",entityId:u,data:{segment:n.company.segment,plan:n.plan??null}}),await Lt(c,u,"tenant.created"),{companyId:u,userId:l.rows[0].id}});try{await tn(
 s.companyId,4e3)&&await d("update platform_outbox set sent_at = now() where company_id = $1 and sent_at is null",[s.companyId])}catch{}let r=await rn({id:s.userId,company_id:s.companyId},
 e);zt(e,a,r,201)}));async function rn(e,a){let t=os.randomUUID(),n=Se(48);return await d(`insert into user_sessions (id, user_id, refresh_hash, expires_at, ip)
-           values ($1,$2,$3, now() + make_interval(days => $4), $5)`,[t,e.id,qe(n),an,a.ip]),{access_token:Vn(e,t),refresh_token:`${t}.${n}`}}var cs,ds=()=>cs||=dt.hashSync("dummy-\
-password-for-timing",12);ve.get("/plans",p(async(e,a)=>{let t=await Ze(),n={signup_open:R.ALLOW_SIGNUP!=="false"&&t.signup_enabled!==!1,demo_enabled:t.demo_enabled!==!1,defaults:{mode:t.
-default_mode,tables:t.default_tables,cards:t.default_cards,day_cutoff:t.default_day_cutoff}};if(!await De())return a.json({...n,hub:!1,plans:[]});try{let o=await Ee("GET","/plans",
-void 0,5e3);a.json({...n,hub:!0,plans:sn(o.plans),trial_default:o.trial_default||null,...po(o.trial_default),signup_open:n.signup_open&&o.signup_enabled!==!1})}catch{a.json({...n,hub:!0,
-plans:[],unavailable:!0})}}));var ms=A.object({name:A.string().trim().min(2,"Informe seu nome").max(120),email:A.string().trim().toLowerCase().email("E-mail inv\xE1lido").max(160),
-password:A.string().min(1,"Informe a senha").max(200),accept_terms:A.literal(!0,{message:"\xC9 preciso aceitar os termos"})});ve.post("/demo",p(async(e,a)=>{let t=await Ze();if(t.demo_enabled===
-!1)throw new z(403,"A demonstra\xE7\xE3o est\xE1 desativada no momento.","demo_disabled");await ae(`demo:${e.ip}`,10,3600);let n=w(ms,e.body||{});if(mt(n.password),n.email.endsWith(
-"@demo.rusten.app"))throw f("Use o seu e-mail");if((await d("select 1 from users where lower(email) = $1",[n.email])).rows[0])throw new z(409,'Este e-mail j\xE1 est\xE1 cadastrado. Use "\
-Entrar" ou recupere a senha.',"email_taken");let i=await dt.hash(n.password,12),s=await d("select id from companies where is_demo and created_at < now() - make_interval(days => $1)\
- limit 20",[Number(t.demo_days)||7]);for(let c of s.rows)await k(m=>m.query("select purge_demo_company($1)",[c.id])).catch(()=>{});let r=await k(async c=>{let m=await c.query("inse\
-rt into companies (name, segment, email, settings, is_demo) values ('Bar Demonstra\xE7\xE3o', 'bar', null, $1, true) returning id, timezone",[{pdv:{mode:"manual",service_fee_bp:1e3}}]),
+           values ($1,$2,$3, now() + make_interval(days => $4), $5)`,[t,e.id,qe(n),an,a.ip]),{access_token:Vn(e,t),refresh_token:`${t}.${n}`}}var cs="$2a$12$kp70/KMsn5mZQWce4FIpauw\
+TPYTLviDGnA5qqL72pouglTQX4b2C2",ds=()=>cs;ve.get("/plans",p(async(e,a)=>{let t=await Ze(),n={signup_open:R.ALLOW_SIGNUP!=="false"&&t.signup_enabled!==!1,demo_enabled:t.demo_enabled!==
+!1,defaults:{mode:t.default_mode,tables:t.default_tables,cards:t.default_cards,day_cutoff:t.default_day_cutoff}};if(!await De())return a.json({...n,hub:!1,plans:[]});try{let o=await Ee(
+"GET","/plans",void 0,5e3);a.json({...n,hub:!0,plans:sn(o.plans),trial_default:o.trial_default||null,...po(o.trial_default),signup_open:n.signup_open&&o.signup_enabled!==!1})}catch{
+a.json({...n,hub:!0,plans:[],unavailable:!0})}}));var ms=A.object({name:A.string().trim().min(2,"Informe seu nome").max(120),email:A.string().trim().toLowerCase().email("E-mail inv\
+\xE1lido").max(160),password:A.string().min(1,"Informe a senha").max(200),accept_terms:A.literal(!0,{message:"\xC9 preciso aceitar os termos"})});ve.post("/demo",p(async(e,a)=>{let t=await Ze();
+if(t.demo_enabled===!1)throw new z(403,"A demonstra\xE7\xE3o est\xE1 desativada no momento.","demo_disabled");await ae(`demo:${e.ip}`,10,3600);let n=w(ms,e.body||{});if(dt(n.password),
+n.email.endsWith("@demo.rusten.app"))throw f("Use o seu e-mail");if((await d("select 1 from users where lower(email) = $1",[n.email])).rows[0])throw new z(409,'Este e-mail j\xE1 est\xE1 \
+cadastrado. Use "Entrar" ou recupere a senha.',"email_taken");let i=await yt.hash(n.password,12),s=await d("select id from companies where is_demo and created_at < now() - make_int\
+erval(days => $1) limit 20",[Number(t.demo_days)||7]);for(let c of s.rows)await k(m=>m.query("select purge_demo_company($1)",[c.id])).catch(()=>{});let r=await k(async c=>{let m=await c.
+query("insert into companies (name, segment, email, settings, is_demo) values ('Bar Demonstra\xE7\xE3o', 'bar', null, $1, true) returning id, timezone",[{pdv:{mode:"manual",service_fee_bp:1e3}}]),
 u=m.rows[0].id;for(let h of Mn)await c.query("insert into roles (company_id, key, name, level, permissions, system) values ($1,$2,$3,$4,$5,true)",[u,h.key,h.name,h.level,h.permissions]);
 let l=await c.query("insert into users (company_id, name, email, password_hash, role_key) values ($1,$2,$3,$4,'owner') returning id",[u,n.name,n.email,i]),{unitId:_}=await Jn(c,u,{
 unit_name:"Matriz",tables:12,cards:30,demo:!0,day_cutoff:5});return await ao(c,u,_,l.rows[0].id,Ne(new Date,m.rows[0].timezone,5)),await g(c,{companyId:u,userId:l.rows[0].id},"demo\
@@ -1593,7 +1594,7 @@ pere a senha.',"email_taken"):c});zt(e,a,await rn({id:r.userId,company_id:r.comp
 trim().min(2).max(120),name:A.string().trim().min(2).max(120),email:A.string().trim().toLowerCase().email().max(160),password:A.string().min(1).max(200),phone:A.string().trim().max(
 30).optional(),keep_data:A.boolean().default(!1),accept_terms:A.literal(!0,{message:"\xC9 preciso aceitar os termos"})}),e.body);if(e.ctx.role!=="owner")throw new z(403,"S\xF3 o propr\
 iet\xE1rio pode ativar o sistema.","forbidden");if(!e.ctx.company.is_demo)throw f("Esta empresa j\xE1 est\xE1 em uso normal.");let n=await Ze();if(R.ALLOW_SIGNUP==="false"||n.signup_enabled===
-!1)throw new z(403,"Novos cadastros est\xE3o temporariamente fechados","signup_closed");if(mt(t.password),(await d("select 1 from users where lower(email) = $1 and id <> $2",[t.email,
+!1)throw new z(403,"Novos cadastros est\xE3o temporariamente fechados","signup_closed");if(dt(t.password),(await d("select 1 from users where lower(email) = $1 and id <> $2",[t.email,
 e.ctx.userId])).rows[0])throw new z(409,'Este e-mail j\xE1 est\xE1 cadastrado. Use "Entrar" ou recupere a senha.',"email_taken");let i=e.ctx.companyId;await k(async s=>{if(!t.keep_data){
 await s.query("select set_config('rusten.purge_demo', $1, true)",[String(i)]);for(let r of["delete from reviews where company_id = $1","delete from loyalty_ledger where company_id \
 = $1 and reverses_id is not null","delete from loyalty_ledger where company_id = $1","delete from delivery_events where company_id = $1","delete from delivery_orders where company_\
@@ -1609,11 +1610,11 @@ onfig('rusten.purge_demo', '', true)"),await s.query("update dining_tables set s
 uct_id in (select id from products where company_id = $1 and demo)",[i]),await s.query("delete from product_price_history where company_id = $1 and product_id in (select id from pr\
 oducts where company_id = $1 and demo)",[i]),await s.query("delete from products where company_id = $1 and demo",[i]),await s.query("delete from categories where company_id = $1 an\
 d demo",[i])}await s.query("update companies set name = $2, phone = coalesce($3, phone), email = $4, is_demo = false, created_at = now() where id = $1",[i,t.company_name,t.phone??null,
-t.email]),await s.query("update users set name = $2, email = $3, password_hash = $4, password_changed_at = now() where id = $1",[e.ctx.userId,t.name,t.email,await dt.hash(t.password,
+t.email]),await s.query("update users set name = $2, email = $3, password_hash = $4, password_changed_at = now() where id = $1",[e.ctx.userId,t.name,t.email,await yt.hash(t.password,
 12)]),await s.query("update user_sessions set revoked_at = now() where user_id = $1 and revoked_at is null",[e.ctx.userId]),await g(s,e.ctx,"demonstracao.ativada",{entity:"company",
 entityId:i,data:{keep_data:t.keep_data}}),await Lt(s,i,"tenant.created")});try{await jt(5)}catch{}zt(e,a,await rn({id:e.ctx.userId,company_id:i},e))}));ve.post("/login",p(async(e,a)=>{
 let t=w(A.object({email:A.string().trim().toLowerCase().max(160),password:A.string().max(200)}),e.body);await ae(`login:${e.ip}`,30,900),await ae(`login-user:${t.email}`,15,900);let{
-rows:n}=await d("select * from users where lower(email) = $1",[t.email]),o=n[0],i=await dt.compare(t.password,o?.password_hash||ds()),s=new z(401,"E-mail ou senha incorretos","bad_\
+rows:n}=await d("select * from users where lower(email) = $1",[t.email]),o=n[0],i=await yt.compare(t.password,o?.password_hash||ds()),s=new z(401,"E-mail ou senha incorretos","bad_\
 credentials");if(!o||!o.active)throw s;if(o.locked_until&&new Date(o.locked_until)>new Date)throw new z(423,"Conta bloqueada temporariamente por tentativas inv\xE1lidas. Tente em 15 m\
 inutos.","locked");if(!i)throw await d(`update users set failed_attempts = failed_attempts + 1,
                locked_until = case when failed_attempts + 1 >= 8 then now() + interval '15 minutes' else locked_until end
@@ -1632,10 +1633,10 @@ al(mins => $3), $4)",[n.id,qe(o),wo,String(e.ip||"").slice(0,64)]);try{await Ee(
 token=${o}`,minutes:wo},2e4)}catch(i){throw await d("update password_resets set used_at = now() where token_hash = $1",[qe(o)]),new z(i.status===429?429:502,i.status===429?i.message:
 "N\xE3o foi poss\xEDvel enviar o e-mail agora. Tente novamente em alguns minutos.","mail_failed")}await g({query:d},{companyId:n.company_id,userId:n.id},"senha.redefinicao_pedida",
 {entity:"user",entityId:n.id}),a.json(Qn)}));ve.post("/reset",p(async(e,a)=>{let t=w(A.object({token:A.string().trim().min(20).max(200),new_password:A.string().max(200)}),e.body);await ae(
-`reset:${e.ip}`,30,3600),mt(t.new_password);let n=await k(async o=>{let i=(await o.query("update password_resets set used_at = now() where token_hash = $1 and used_at is null and e\
+`reset:${e.ip}`,30,3600),dt(t.new_password);let n=await k(async o=>{let i=(await o.query("update password_resets set used_at = now() where token_hash = $1 and used_at is null and e\
 xpires_at > now() returning user_id",[qe(t.token)])).rows[0];if(!i)throw new z(400,"Este link expirou ou j\xE1 foi usado. Pe\xE7a um novo em \u201CEsqueci minha senha\u201D.","rese\
 t_invalid");let s=(await o.query("select id, company_id from users where id = $1 and active",[i.user_id])).rows[0];if(!s)throw new z(400,"Conta indispon\xEDvel.","reset_invalid");return await o.
-query("update users set password_hash = $2, password_changed_at = now(), failed_attempts = 0, locked_until = null where id = $1",[s.id,await dt.hash(t.new_password,10)]),await o.query(
+query("update users set password_hash = $2, password_changed_at = now(), failed_attempts = 0, locked_until = null where id = $1",[s.id,await yt.hash(t.new_password,10)]),await o.query(
 "update user_sessions set revoked_at = now() where user_id = $1 and revoked_at is null",[s.id]),await g(o,{companyId:s.company_id,userId:s.id},"senha.redefinida_por_email",{entity:"\
 user",entityId:s.id}),{ok:!0}});a.json(n)}));ve.post("/refresh",p(async(e,a)=>{try{await us(e,a)}catch(t){throw St(e)&&t?.status===401&&Zn(a),t}}));async function us(e,a){let t=fo(
 e),[n,o]=t.split(".");if(!n||!o||!/^[0-9a-f-]{36}$/.test(n))throw new z(401,"Sess\xE3o inv\xE1lida","unauthenticated");let i=await k(async s=>{let{rows:r}=await s.query("select s.*\
@@ -1645,13 +1646,13 @@ voked_at is null",[c.user_id]),await g(s,{companyId:c.company_id,userId:c.user_i
 "update user_sessions set refresh_hash = $2, rotated_at = now() where id = $1",[n,qe(m)]),{access_token:Vn({id:c.user_id,company_id:c.company_id},n),refresh_token:`${n}.${m}`}});if(!i)
 throw new z(401,"Sess\xE3o encerrada por seguran\xE7a. Entre novamente.","unauthenticated");zt(e,a,i)}ve.post("/logout",Xe(),p(async(e,a)=>{e.body?.all===!0?await d("update user_se\
 ssions set revoked_at = now() where user_id = $1 and revoked_at is null",[e.ctx.userId]):await d("update user_sessions set revoked_at = now() where id = $1",[e.ctx.sessionId]),St(e)&&
-Zn(a),a.json({ok:!0})}));ve.post("/password",Xe(),p(async(e,a)=>{let t=w(A.object({current:A.string().max(200),next:A.string().max(200)}),e.body);mt(t.next);let{rows:n}=await d("se\
-lect password_hash from users where id = $1",[e.ctx.userId]);if(!await dt.compare(t.current,n[0].password_hash))throw f("Senha atual incorreta");await d("update users set password_\
-hash = $2, password_changed_at = now() where id = $1",[e.ctx.userId,await dt.hash(t.next,12)]),await d("update user_sessions set revoked_at = now() where user_id = $1 and id <> $2 \
+Zn(a),a.json({ok:!0})}));ve.post("/password",Xe(),p(async(e,a)=>{let t=w(A.object({current:A.string().max(200),next:A.string().max(200)}),e.body);dt(t.next);let{rows:n}=await d("se\
+lect password_hash from users where id = $1",[e.ctx.userId]);if(!await yt.compare(t.current,n[0].password_hash))throw f("Senha atual incorreta");await d("update users set password_\
+hash = $2, password_changed_at = now() where id = $1",[e.ctx.userId,await yt.hash(t.next,12)]),await d("update user_sessions set revoked_at = now() where user_id = $1 and id <> $2 \
 and revoked_at is null",[e.ctx.userId,e.ctx.sessionId]),await g({query:d},e.ctx,"senha.alterada",{entity:"user",entityId:e.ctx.userId}),a.json({ok:!0})}));ve.get("/me",Xe(),p(async(e,a)=>{
 let t=e.ctx,n=await d("select id, name, day_cutoff from units where company_id = $1 and active order by id",[t.companyId]),o=t.terminalUnitId||t.unitId||n.rows[0]?.id;a.json({user:{
 id:t.userId,name:t.name,email:t.email,role:t.role,roleName:t.roleName,level:t.level,unitId:t.unitId},company:t.company,brand:await Bt({query:d},t.companyId),permissions:[...t.perms],
-access:t.access,units:n.rows,unitId:o,terminalId:t.terminalId,pdv:await Ye({query:d},t,o),catalog:{permissions:_t,modules:kt},notice:await ls()})}));async function ls(){let e=await Ze();
+access:t.access,units:n.rows,unitId:o,terminalId:t.terminalId,pdv:await Ye({query:d},t,o),catalog:{permissions:pt,modules:kt},notice:await ls()})}));async function ls(){let e=await Ze();
 return e.notice_text?{text:e.notice_text,level:e.notice_level==="warn"?"warn":"info"}:null}import{Router as ps}from"npm:express@5.2.1";import ta from"npm:bcryptjs@3.0.3";import{z as j}from"npm:zod@4.6.5";var re=ps();async function go(e,a){let t=await d("select level from roles where company_id = $1 and key = $2",[e,a]);if(!t.rows[0])throw f("Perfil inexistente");return t.rows[0].level}
 re.get("/users",y("usuarios.gerenciar"),p(async(e,a)=>{let{rows:t}=await d(`select u.id, u.name, u.email, u.role_key, r.name as role_name, r.level, u.unit_id, u.active, u.created_a\
 t,
@@ -1660,7 +1661,7 @@ t,
       where u.company_id = $1 order by r.level desc, u.name`,[e.ctx.companyId]);a.json(t)}));var bo=j.object({name:j.string().trim().min(2).max(120),email:j.string().trim().toLowerCase().
 email().max(160),password:j.string().max(200).optional(),role_key:j.string().max(40),unit_id:j.number().int().nullable().optional(),active:j.boolean().optional()});re.post("/users",
 y("usuarios.gerenciar"),p(async(e,a)=>{let t=w(bo,e.body);if(await go(e.ctx.companyId,t.role_key)>e.ctx.level)throw G("N\xE3o \xE9 poss\xEDvel criar usu\xE1rio com perfil acima do seu");
-if(!t.password)throw f("Informe a senha inicial");if(mt(t.password),t.unit_id&&await na(e.ctx.companyId,t.unit_id),(await d("select 1 from users where lower(email) = $1",[t.email])).
+if(!t.password)throw f("Informe a senha inicial");if(dt(t.password),t.unit_id&&await na(e.ctx.companyId,t.unit_id),(await d("select 1 from users where lower(email) = $1",[t.email])).
 rows[0])throw b("E-mail j\xE1 cadastrado");let o=await d("insert into users (company_id, name, email, password_hash, role_key, unit_id) values ($1,$2,$3,$4,$5,$6) returning id",[e.
 ctx.companyId,t.name,t.email,await ta.hash(t.password,12),t.role_key,t.unit_id??null]);await g({query:d},e.ctx,"usuario.criado",{entity:"user",entityId:o.rows[0].id,data:{role:t.role_key}}),
 await Lt({query:d},e.ctx.companyId,"tenant.updated"),a.status(201).json({id:o.rows[0].id})}));re.put("/users/:id",y("usuarios.gerenciar"),p(async(e,a)=>{let t=Number(e.params.id),n=w(
@@ -1669,22 +1670,22 @@ bo.partial(),e.body),i=(await d(`select u.*, r.level from users u join roles r o
 i.id!==e.ctx.userId&&e.ctx.role!=="owner")throw G("N\xE3o \xE9 poss\xEDvel alterar usu\xE1rio de n\xEDvel igual ou superior");if(n.role_key&&await go(e.ctx.companyId,n.role_key)>e.
 ctx.level)throw G("Perfil acima do seu");if(i.role_key==="owner"&&n.role_key&&n.role_key!=="owner"&&(await d("select count(*)::int n from users where company_id = $1 and role_key =\
  'owner' and active",[e.ctx.companyId])).rows[0].n<=1)throw f("A empresa precisa de ao menos um propriet\xE1rio ativo");n.unit_id&&await na(e.ctx.companyId,n.unit_id);let s=null;n.
-password&&(mt(n.password),s=await ta.hash(n.password,12)),await d(`update users set name = coalesce($3, name), email = coalesce($4, email), role_key = coalesce($5, role_key),
+password&&(dt(n.password),s=await ta.hash(n.password,12)),await d(`update users set name = coalesce($3, name), email = coalesce($4, email), role_key = coalesce($5, role_key),
              unit_id = case when $6::boolean then $7 else unit_id end, active = coalesce($8, active),
              password_hash = coalesce($9, password_hash),
              password_changed_at = case when $9 is not null then now() else password_changed_at end
            where id = $1 and company_id = $2`,[t,e.ctx.companyId,n.name??null,n.email??null,n.role_key??null,"unit_id"in n,n.unit_id??null,n.active??null,s]),(n.active===!1||s)&&await d(
 "update user_sessions set revoked_at = now() where user_id = $1 and revoked_at is null",[t]),await g({query:d},e.ctx,"usuario.alterado",{entity:"user",entityId:t,data:{...n,password:n.
 password?"alterada":void 0}}),a.json({ok:!0})}));re.get("/roles",y("usuarios.gerenciar"),p(async(e,a)=>{let{rows:t}=await d("select key, name, level, permissions, system from roles\
- where company_id = $1 order by level desc",[e.ctx.companyId]);a.json({roles:t,catalog:_t})}));re.put("/roles/:key",y("usuarios.gerenciar"),p(async(e,a)=>{let t=w(j.object({name:j.
+ where company_id = $1 order by level desc",[e.ctx.companyId]);a.json({roles:t,catalog:pt})}));re.put("/roles/:key",y("usuarios.gerenciar"),p(async(e,a)=>{let t=w(j.object({name:j.
 string().trim().min(2).max(60).optional(),permissions:j.array(j.string()).max(200).optional(),level:j.number().int().min(1).max(99).optional()}),e.body),n=(await d("select * from r\
 oles where company_id = $1 and key = $2",[e.ctx.companyId,e.params.key])).rows[0];if(!n)throw v("Perfil n\xE3o encontrado");if(n.key==="owner")throw G("O perfil Propriet\xE1rio n\xE3o po\
 de ser alterado");if(n.level>=e.ctx.level)throw G("S\xF3 \xE9 poss\xEDvel alterar perfis abaixo do seu n\xEDvel");if(t.level&&t.level>=e.ctx.level)throw G("N\xEDvel acima do seu");
-if(t.permissions){let o=t.permissions.find(s=>!(s in _t));if(o)throw f(`Permiss\xE3o inv\xE1lida: ${o}`);let i=t.permissions.find(s=>!e.ctx.can(s));if(i)throw G(`Voc\xEA n\xE3o pode conc\
+if(t.permissions){let o=t.permissions.find(s=>!(s in pt));if(o)throw f(`Permiss\xE3o inv\xE1lida: ${o}`);let i=t.permissions.find(s=>!e.ctx.can(s));if(i)throw G(`Voc\xEA n\xE3o pode conc\
 eder o que n\xE3o tem: ${i}`)}await d("update roles set name = coalesce($3,name), permissions = coalesce($4,permissions), level = coalesce($5,level) where company_id = $1 and key =\
  $2",[e.ctx.companyId,n.key,t.name??null,t.permissions??null,t.level??null]),await g({query:d},e.ctx,"perfil.alterado",{entity:"role",entityId:n.key,data:{before:n.permissions,after:t.
 permissions}}),a.json({ok:!0})}));re.post("/roles",y("usuarios.gerenciar"),p(async(e,a)=>{let t=w(j.object({name:j.string().trim().min(2).max(60),level:j.number().int().min(1).max(
-99),permissions:j.array(j.string()).max(200)}),e.body);if(t.level>=e.ctx.level)throw G("N\xEDvel acima do seu");let n=t.permissions.find(i=>!(i in _t)||!e.ctx.can(i));if(n)throw G(
+99),permissions:j.array(j.string()).max(200)}),e.body);if(t.level>=e.ctx.level)throw G("N\xEDvel acima do seu");let n=t.permissions.find(i=>!(i in pt)||!e.ctx.can(i));if(n)throw G(
 `Permiss\xE3o inv\xE1lida ou n\xE3o conced\xEDvel: ${n}`);let o=`custom_${Se(4).toLowerCase().replace(/[^a-z0-9]/g,"x")}`;await d("insert into roles (company_id, key, name, level, \
 permissions) values ($1,$2,$3,$4,$5)",[e.ctx.companyId,o,t.name,t.level,t.permissions]),await g({query:d},e.ctx,"perfil.criado",{entity:"role",entityId:o,data:t}),a.status(201).json(
 {key:o})}));async function na(e,a){if(!(await d("select id from units where id = $1 and company_id = $2",[a,e])).rows[0])throw f("Unidade inv\xE1lida")}re.get("/units",p(async(e,a)=>{
@@ -1744,7 +1745,7 @@ s from users u join roles r on r.company_id = u.company_id and r.key = u.role_ke
 ada: credenciais inv\xE1lidas ou sem permiss\xE3o para autorizar esta a\xE7\xE3o");let r=Se(24);await d(`insert into manager_authorizations (company_id, requested_by, authorized_by\
 , action, scope, token_hash, expires_at)
            values ($1,$2,$3,$4,$5,$6, now() + interval '2 minutes')`,[e.ctx.companyId,e.ctx.userId,i.id,t.action,{reason:t.reason,terminal:e.ctx.terminalId},qe(r)]),await g({query:d},
-e.ctx,"autorizacao.concedida",{reason:t.reason,data:{action:t.action,authorized_by:i.id}}),a.json({authorization:r,expires_in:120})}));async function ut(e,a,t,n){if(!t)throw G("Est\
+e.ctx,"autorizacao.concedida",{reason:t.reason,data:{action:t.action,authorized_by:i.id}}),a.json({authorization:r,expires_in:120})}));async function mt(e,a,t,n){if(!t)throw G("Est\
 a a\xE7\xE3o exige autoriza\xE7\xE3o de um gerente","authorization_required");let{rows:o}=await e.query(`update manager_authorizations set used_at = now()
       where token_hash = $1 and company_id = $2 and requested_by = $3 and action = $4 and used_at is null and expires_at > now()
       returning authorized_by, scope`,[qe(t),a.companyId,a.userId,n]);if(!o[0])throw G("Autoriza\xE7\xE3o gerencial inv\xE1lida, expirada ou j\xE1 utilizada");return o[0]}import{Router as Ms}from"npm:express@5.2.1";import{z as S}from"npm:zod@4.6.5";var fs="https://loja.infinitepay.io";var xo=e=>/^[a-z0-9][a-z0-9_.-]{1,59}$/.test(e),ws=e=>{let a=String(e).match(/R\$\s*([\d.]+,\d{2})/);return a?Math.round(Number(a[1].replace(/\./g,"").replace(",","."))*100):null};
@@ -1966,7 +1967,7 @@ t.name??null,t.sort??null,t.active??null])).rows[0])throw v();a.json({ok:!0})}))
 here company_id = $1 order by id",[e.ctx.companyId])).rows)}));ue.post("/sectors",y("cardapio.gerenciar"),p(async(e,a)=>{let t=w(S.object({name:S.string().trim().min(2).max(60)}),e.
 body),n=await d("insert into production_sectors (company_id, name) values ($1,$2) returning id",[e.ctx.companyId,t.name]);a.status(201).json({id:n.rows[0].id})}));ue.get("/products",
 y("cardapio.visualizar"),p(async(e,a)=>{let t=[e.ctx.companyId],n="p.company_id = $1";e.query.active!=="all"&&(n+=" and p.active"),e.query.q&&(t.push(`%${String(e.query.q).slice(0,
-60)}%`,yt(e.query.q)),n+=` and (p.name ilike $${t.length-1} or p.sku = $${t.length} or exists (select 1 from scan_codes s where s.company_id = p.company_id and s.entity = 'PRODUTO'\
+60)}%`,_t(e.query.q)),n+=` and (p.name ilike $${t.length-1} or p.sku = $${t.length} or exists (select 1 from scan_codes s where s.company_id = p.company_id and s.entity = 'PRODUTO'\
  and s.entity_id = p.id and s.code = $${t.length}))`),e.query.category_id&&(t.push(Number(e.query.category_id)),n+=` and p.category_id = $${t.length}`);let o=e.ctx.can("relatorios.\
 cmv")||e.ctx.can("cardapio.gerenciar"),{rows:i}=await d(`select p.id, p.name, p.description, p.sku, p.kind, p.unit, p.price_cents, ${o?"p.cost_cents,":""} p.favorite, p.active, p.d\
 emo,
@@ -2002,7 +2003,7 @@ tion=$4, sku=$5, kind=$6, unit=$7, price_cents=$8, cost_cents=$9, category_id=$1
          favorite=$12, active=$13, channels=$14, allergens=$15, updated_at=now() where id=$1 and company_id=$2`,[t,e.ctx.companyId,s.name,s.description,s.sku||null,s.kind,s.unit,s.
 price_cents,s.cost_cents,s.category_id,s.sector_id,s.favorite,s.active,s.channels,s.allergens]),n.price_cents!=null&&n.price_cents!==i.price_cents&&(await o.query("insert into prod\
 uct_price_history (company_id, product_id, old_cents, new_cents, user_id) values ($1,$2,$3,$4,$5)",[e.ctx.companyId,t,i.price_cents,n.price_cents,e.ctx.userId]),await g(o,e.ctx,"pr\
-oduto.preco",{entity:"product",entityId:t,data:{before:i.price_cents,after:n.price_cents}})),n.codes){let r=n.codes.map(yt).filter(Boolean);await o.query("delete from scan_codes wh\
+oduto.preco",{entity:"product",entityId:t,data:{before:i.price_cents,after:n.price_cents}})),n.codes){let r=n.codes.map(_t).filter(Boolean);await o.query("delete from scan_codes wh\
 ere company_id = $1 and entity = 'PRODUTO' and entity_id = $2 and not (code = any($3))",[e.ctx.companyId,t,r]);for(let c of r)await rt(o,e.ctx.companyId,c,"PRODUTO",t)}await Lo(o,e.
 ctx.companyId,t,n.groups),await g(o,e.ctx,"produto.alterado",{entity:"product",entityId:t,data:{...n,groups:n.groups?"alterados":void 0}})}).catch(o=>{throw o.code==="23505"?b("SKU\
  j\xE1 usado em outro produto"):o}),a.json({ok:!0})}));function Ls(e){let a=/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(e||""));if(!a)throw f("Envie um\
@@ -2039,18 +2040,18 @@ Number(I.product_id));B&&!u.has(I.alias_norm)&&u.set(I.alias_norm,B)}let l=new M
 -1),h=[];for(let I of[...t.categories,...t.items.map(B=>B.category).filter(Boolean)])h.some(B=>J(B)===J(I))||h.push(I);let $=I=>{for(let[B,oe]of Object.entries(t.category_map))if(J(
 B)===J(I))return oe;return null},N=null,P=[],T=h.map((I,B)=>{let oe=$(I),Z=oe&&oe.category_id?o.find(F=>Number(F.id)===Number(oe.category_id))||null:m.get(J(I));oe&&oe.category_id&&
 !Z&&(Z=null),!Z&&n&&!oe&&P.push(I);let ne={};if(Z)for(let F of i)Number(F.category_id)===Number(Z.id)&&F.sector_id&&(ne[F.sector_id]=(ne[F.sector_id]||0)+1);let ot=Object.entries(ne).
-sort((F,Tt)=>Tt[1]-F[1])[0]?.[0],pt=J(I).split(" "),Re=s.find(F=>pt.includes(J(F.name))||J(F.name)===J(I))||(Bs.some(([F,Tt])=>F.test(J(I))&&(N=s.find(Pn=>J(Pn.name)===Tt)))?N:null),
+sort((F,Tt)=>Tt[1]-F[1])[0]?.[0],lt=J(I).split(" "),Re=s.find(F=>lt.includes(J(F.name))||J(F.name)===J(I))||(Bs.some(([F,Tt])=>F.test(J(I))&&(N=s.find(Pn=>J(Pn.name)===Tt)))?N:null),
 bt=ot?Number(ot):Re?Number(Re.id):null,Me=Object.prototype.hasOwnProperty.call(t.category_sectors,I)?t.category_sectors[I]:bt,_e=Me&&s.some(F=>Number(F.id)===Number(Me))?Number(Me):
 null,me=[];Z&&!Z.active&&me.push("reativar"),Z&&!n&&Z.name!==I&&me.push("renomear"),Z&&!n&&Z.sort!==B&&me.push("ordem");let ye=!!(oe&&oe.category_id&&Z);return{name:I,id:Z?Number(Z.
 id):null,current_name:Z?.name??null,mapped:ye,action:Z?me.length?"atualizar":"igual":"criar",changes:me,sort:!Z&&n?_+1+B:B,sector_id:_e}}),q=I=>I?T.find(B=>J(B.name)===J(I)):null,E=I=>I?
 s.find(B=>J(B.name)===J(I)):null,W=new Set,Y=new Set,U=new Set,H=t.items.map(I=>{let B=J(I.name);if(!B)return{...I,action:"ignorar",reason:"nome vazio"};if(W.has(B))return{...I,action:"\
 ignorar",reason:"repetido no arquivo"};W.add(B);let oe=[],Z=I.sku?String(I.sku).toLowerCase():null,ne=Z&&l.get(Z)||u.get(B)||null,ot=I.sku||null;Z&&(Y.has(Z)||l.get(Z)&&ne&&l.get(Z).
-id!==ne.id)&&(ot=null,oe.push("c\xF3digo repetido: entra sem c\xF3digo")),Z&&Y.add(Z);let pt=[];for(let me of I.codes||[]){let ye=yt(me);if(!ye||/^0+$/.test(ye))continue;if(U.has(ye)){
+id!==ne.id)&&(ot=null,oe.push("c\xF3digo repetido: entra sem c\xF3digo")),Z&&Y.add(Z);let lt=[];for(let me of I.codes||[]){let ye=_t(me);if(!ye||/^0+$/.test(ye))continue;if(U.has(ye)){
 oe.push(`c\xF3digo de barras ${ye} repetido na planilha`);continue}let F=c.get(ye);if(F&&!(F.entity==="PRODUTO"&&ne&&Number(F.entity_id)===Number(ne.id))){oe.push(`c\xF3digo de barras\
- ${ye} j\xE1 usado`);continue}U.add(ye),pt.push(ye)}let Re=q(I.category),bt=E(I.sector),Me={...I,sku:ot,codes:pt,category_resolved:Re?Re.current_name||Re.name:null,warnings:oe};if(!ne)
+ ${ye} j\xE1 usado`);continue}U.add(ye),lt.push(ye)}let Re=q(I.category),bt=E(I.sector),Me={...I,sku:ot,codes:lt,category_resolved:Re?Re.current_name||Re.name:null,warnings:oe};if(!ne)
 return{...Me,action:"criar",product_id:null,sector_id:bt?Number(bt.id):Re?.sector_id??null,active:I.available||!t.inactive_unavailable};let _e=[];return t.update_prices&&ne.price_cents!==
 I.price_cents&&_e.push("preco"),n&&t.update_costs&&I.cost_cents!=null&&ne.cost_cents!==I.cost_cents&&_e.push("custo"),t.update_categories&&Re&&Number(ne.category_id)!==Re.id&&_e.push(
-"categoria"),!ne.active&&I.available&&_e.push("reativar"),n&&ne.active&&!I.available&&t.inactive_unavailable&&_e.push("pausar"),ot&&!ne.sku&&_e.push("codigo"),pt.some(me=>!c.has(me))&&
+"categoria"),!ne.active&&I.available&&_e.push("reativar"),n&&ne.active&&!I.available&&t.inactive_unavailable&&_e.push("pausar"),ot&&!ne.sku&&_e.push("codigo"),lt.some(me=>!c.has(me))&&
 _e.push("codigo_barras"),{...Me,action:_e.length?"atualizar":"igual",changes:_e,product_id:Number(ne.id),current_name:ne.name,current_price_cents:ne.price_cents,current_cost_cents:ne.
 cost_cents,current_sku:ne.sku,demo:ne.demo}}),de=I=>H.filter(B=>B.action===I).length;return{categories:T,items:H,sectors:s,unresolved:P,existing_categories:o.filter(I=>I.active).map(
 I=>({id:Number(I.id),name:I.name})),summary:{criar:de("criar"),atualizar:de("atualizar"),igual:de("igual"),ignorar:de("ignorar"),categorias_criar:T.filter(I=>I.action==="criar").length,
@@ -2238,7 +2239,7 @@ s,n.companyId,t.scan?.product_code);if(U.type!=="PRODUTO")throw f("C\xF3digo lid
 do c\xF3digo lido");if(m=U.product.id,t.launch_mode==="dupla"){let H=await Vt(s,n.companyId,t.scan?.card_code);if(H.type!=="COMANDA")throw f("Dupla leitura exige a leitura da coman\
 da antes do produto","card_required");if(Number(H.card.id)!==Number(r.card_id))throw b("Comanda lida n\xE3o corresponde ao consumo de destino","card_mismatch")}}else if(t.launch_mode===
 "excecao"){if(!c.allow_manual_exception)throw G("Exce\xE7\xE3o manual desabilitada","exception_disabled");if(Q(n,"pdv.excecao_dupla_leitura"),!t.exception_reason)throw f("Informe o\
- motivo da exce\xE7\xE3o");c.exception_requires_manager&&(u=(await ut(s,n,t.authorization,"excecao_dupla_leitura")).authorized_by)}else if(t.launch_mode==="delivery"){if(Q(n,"deliv\
+ motivo da exce\xE7\xE3o");c.exception_requires_manager&&(u=(await mt(s,n,t.authorization,"excecao_dupla_leitura")).authorized_by)}else if(t.launch_mode==="delivery"){if(Q(n,"deliv\
 ery.gerenciar"),r.kind!=="delivery")throw f("Lan\xE7amento de delivery s\xF3 em pedidos de delivery")}else{if(c.double_read_mandatory)throw G("Dupla leitura obrigat\xF3ria: use a exce\
 \xE7\xE3o autorizada para lan\xE7ar manualmente","double_read_required");if(!c.allow_manual)throw G("Lan\xE7amento manual desabilitado","manual_disabled");Q(n,"pdv.lancamento_manua\
 l")}if(!m)throw f("Informe o produto");let l=(await s.query("select * from products where id = $1 and company_id = $2",[m,n.companyId])).rows[0];if(!l)throw v("Produto n\xE3o encontra\
@@ -2251,8 +2252,8 @@ if(h&&_!==c.qty_per_scan&&(Q(n,"pdv.alterar_quantidade"),_>c.max_qty_per_scan))t
         where g.product_id = $1 group by g.id order by g.sort, g.id`,[l.id])).rows,N=[];for(let U of $){let H=U.options.filter(de=>t.option_ids.includes(de.id));if(H.length<U.min_select)
 throw f(`Escolha ${U.min_select===1?"uma op\xE7\xE3o":`${U.min_select} op\xE7\xF5es`} em "${U.name}"`,"options_required");if(H.length>U.max_select)throw f(`No m\xE1ximo ${U.max_select}\
  em "${U.name}"`);for(let de of H)N.push({group:U.name,id:de.id,name:de.name,price_cents:de.price_cents})}if(N.length!==new Set(t.option_ids).size)throw f("Op\xE7\xE3o inv\xE1lida para este\
- produto");let P=N.reduce((U,H)=>U+H.price_cents,0),T=l.price_cents,q={};t.price_override_cents!=null&&t.price_override_cents!==l.price_cents&&(n.can("pdv.alterar_preco")||await ut(
-s,n,t.authorization,"alterar_preco"),T=t.price_override_cents,q.price={from:l.price_cents,to:T});let E=t.discount_cents||0;E&&(n.can("pdv.desconto")||await ut(s,n,t.authorization,"\
+ produto");let P=N.reduce((U,H)=>U+H.price_cents,0),T=l.price_cents,q={};t.price_override_cents!=null&&t.price_override_cents!==l.price_cents&&(n.can("pdv.alterar_preco")||await mt(
+s,n,t.authorization,"alterar_preco"),T=t.price_override_cents,q.price={from:l.price_cents,to:T});let E=t.discount_cents||0;E&&(n.can("pdv.desconto")||await mt(s,n,t.authorization,"\
 desconto"),q.discount=E);let W=Dt(T,_,P,E);if(E>Dt(T,_,P,0))throw f("Desconto maior que o valor do item");let Y=(await s.query(`insert into order_items (company_id, session_id, pro\
 duct_id, description, qty, unit, unit_price_cents, modifiers, modifiers_cents,
          discount_cents, total_cents, notes, sector_id, kitchen_status, launch_mode, terminal_id, user_id, idempotency_key, sent_at)
@@ -2267,7 +2268,7 @@ rom order_items where company_id = $1 and idempotency_key = $2",[e.ctx.companyId
 ems/:id/cancel",y("pdv.lancar"),p(async(e,a)=>{let t=w(C.object({reason:C.string().trim().min(3).max(200),authorization:C.string().max(100).optional()}),e.body),n=await k(async o=>{
 let i=(await o.query("select * from order_items where id = $1 and company_id = $2",[Number(e.params.id),e.ctx.companyId])).rows[0];if(!i)throw v("Item n\xE3o encontrado");let s=await se(
 o,e.ctx.companyId,i.session_id);ct(s);let r=(await o.query("select * from order_items where id = $1 for update",[i.id])).rows[0];if(r.status!=="ativo")throw b("Item j\xE1 cancelado");
-let c=null;e.ctx.can("pdv.cancelar_item")||(c=(await ut(o,e.ctx,t.authorization,"cancelar_item")).authorized_by);let m=["preparando","pronto","entregue"].includes(r.kitchen_status);
+let c=null;e.ctx.can("pdv.cancelar_item")||(c=(await mt(o,e.ctx,t.authorization,"cancelar_item")).authorized_by);let m=["preparando","pronto","entregue"].includes(r.kitchen_status);
 if(await o.query(`update order_items set status = 'cancelado', cancel_reason = $2, canceled_by = $3, canceled_at = now(),
                       kitchen_status = case when kitchen_status = 'nao_produz' then kitchen_status else 'cancelado' end where id = $1`,[r.id,t.reason,e.ctx.userId]),(await K(o,s.id)).
 balance<0)throw b("Cancelar este item deixaria o consumo com pagamento maior que o total. Estorne o pagamento antes.","overpaid");return await o.query("update consumption_sessions \
@@ -2304,7 +2305,7 @@ e dining_tables set status = 'limpeza' where id = $1 and status in ('ocupada','c
                   and not exists (select 1 from consumption_sessions where table_id = $1 and status in ('aberta','em_fechamento'))`,[a])}te.post("/sessions/:id/service-fee",y("pdv.\
 lancar"),p(async(e,a)=>{let t=w(C.object({bp:C.number().int().min(0).max(3e3),reason:C.string().trim().min(3).max(200),authorization:C.string().max(100).optional()}),e.body);a.json(
 await k(async n=>{let o=await se(n,e.ctx.companyId,Number(e.params.id));if(!["aberta","em_fechamento"].includes(o.status))throw b("Consumo encerrado");e.ctx.can("pdv.taxa_servico")||
-await ut(n,e.ctx,t.authorization,"taxa_servico");let i=(await K(n,o.id)).paid;await n.query("update consumption_sessions set service_fee_bp = $2, service_fee_removed_reason = $3, v\
+await mt(n,e.ctx,t.authorization,"taxa_servico");let i=(await K(n,o.id)).paid;await n.query("update consumption_sessions set service_fee_bp = $2, service_fee_removed_reason = $3, v\
 ersion = version + 1 where id = $1",[o.id,t.bp,t.reason]);let s=await K(n,o.id);if(i>s.total)throw b("Pagamento registrado supera o novo total. Estorne antes.","overpaid");return await g(
 n,e.ctx,"pdv.taxa_servico",{entity:"session",entityId:o.id,reason:t.reason,data:{from:o.service_fee_bp,to:t.bp}}),s}))}));te.post("/sessions/:id/request-close",y("pdv.lancar"),p(async(e,a)=>{
 a.json(await k(async t=>{let n=await se(t,e.ctx.companyId,Number(e.params.id));return ct(n),await t.query("update consumption_sessions set status = 'em_fechamento', version = versi\
@@ -2322,7 +2323,7 @@ now(), closed_by = $2, version = version + 1 where id = $1",[o.id,e.ctx.userId])
 o.encerrado",{entity:"session",entityId:o.id,unitId:o.unit_id,data:i}),{ok:!0,totals:i,points_earned:s?.points||0}}))}));te.post("/sessions/:id/cancel",y("pdv.lancar"),p(async(e,a)=>{
 let t=w(C.object({reason:C.string().trim().min(3).max(200),authorization:C.string().max(100).optional()}),e.body);a.json(await k(async n=>{let o=await se(n,e.ctx.companyId,Number(e.
 params.id));if(!["aberta","em_fechamento"].includes(o.status))throw b("Consumo j\xE1 encerrado");let i=await K(n,o.id);if(i.paid>0)throw b("H\xE1 pagamentos confirmados: estorne antes\
- de cancelar","has_payments");let s=null;i.items>0&&!e.ctx.can("pdv.cancelar_venda")&&(s=(await ut(n,e.ctx,t.authorization,"cancelar_venda")).authorized_by);let r=(await n.query("s\
+ de cancelar","has_payments");let s=null;i.items>0&&!e.ctx.can("pdv.cancelar_venda")&&(s=(await mt(n,e.ctx,t.authorization,"cancelar_venda")).authorized_by);let r=(await n.query("s\
 elect id from order_items where session_id = $1 and status = 'ativo' and kitchen_status in ('novo','aceito','nao_produz')",[o.id])).rows;for(let c of r)await Gt(n,e.ctx,c.id,`Consu\
 mo cancelado: ${t.reason}`);return await n.query(`update order_items set status = 'cancelado', cancel_reason = $2, canceled_by = $3, canceled_at = now(),
                       kitchen_status = case when kitchen_status = 'nao_produz' then kitchen_status else 'cancelado' end
@@ -2330,7 +2331,7 @@ mo cancelado: ${t.reason}`);return await n.query(`update order_items set status 
 lada', closed_at = now(), closed_by = $2, version = version + 1 where id = $1",[o.id,e.ctx.userId]),o.table_id&&await hn(n,o.table_id),await g(n,e.ctx,"consumo.cancelado",{entity:"\
 session",entityId:o.id,reason:t.reason,data:{items_cents:i.items,authorized_by:s}}),{ok:!0}}))}));te.post("/sessions/:id/reopen",y("pdv.lancar"),p(async(e,a)=>{let t=w(C.object({reason:C.
 string().trim().min(3).max(200),authorization:C.string().max(100).optional()}),e.body);a.json(await k(async n=>{let o=await se(n,e.ctx.companyId,Number(e.params.id));if(o.status!==
-"encerrada")throw b("S\xF3 consumos encerrados podem ser reabertos");let i=null;if(e.ctx.can("pdv.reabrir_comanda")||(i=(await ut(n,e.ctx,t.authorization,"reabrir_comanda")).authorized_by),
+"encerrada")throw b("S\xF3 consumos encerrados podem ser reabertos");let i=null;if(e.ctx.can("pdv.reabrir_comanda")||(i=(await mt(n,e.ctx,t.authorization,"reabrir_comanda")).authorized_by),
 o.card_id&&(await n.query("select 1 from consumption_sessions where card_id = $1 and status in ('aberta','em_fechamento') and id <> $2",[o.card_id,o.id])).rows[0])throw b("O cart\xE3o\
  j\xE1 est\xE1 em uso por outro consumo. Transfira os itens em vez de reabrir.","card_busy");return await n.query("update consumption_sessions set status = 'aberta', closed_at = nu\
 ll, closed_by = null, version = version + 1 where id = $1",[o.id]),await Uo(n,e.ctx,o.id,"Consumo reaberto"),o.table_id&&await n.query("update dining_tables set status = 'ocupada' \
@@ -3057,7 +3058,7 @@ ct coalesce(sum(-m.qty * m.unit_cost_cents) filter (where m.kind = 'perda'),0)::
 nct s.customer_id)::int as identified,
       count(distinct s.customer_id) filter (where exists (select 1 from consumption_sessions o where o.customer_id = s.customer_id and o.status = 'encerrada' and o.business_date < \
 $2))::int as returning
-    from consumption_sessions s where ${c} and s.customer_id is not null`,i)).rows[0],pt=(await d(`select coalesce(sum(points) filter (where kind = 'ganho'),0)::int as earned, coal\
+    from consumption_sessions s where ${c} and s.customer_id is not null`,i)).rows[0],lt=(await d(`select coalesce(sum(points) filter (where kind = 'ganho'),0)::int as earned, coal\
 esce(-sum(points) filter (where kind = 'resgate'),0)::int as redeemed
     from loyalty_ledger where company_id = $1 and created_at >= $2::date and created_at < $3::date + 1`,[e.companyId,a.from,a.to])).rows[0],Re=(await d("select count(*)::int as n, \
 round(avg(score)::numeric, 2)::float as average from reviews where company_id = $1 and created_at >= $2::date and created_at < $3::date + 1",[e.companyId,a.from,a.to])).rows[0],bt=t?
@@ -3087,7 +3088,7 @@ map(O=>({...O,items_cents:F(Number(O.items_cents))})),by_product:P.map(O=>({...O
 by_user:W.map(O=>({...O,items_cents:F(Number(O.items_cents))})),by_table:Y.map(O=>({...O,items_cents:F(Number(O.items_cents))})),by_channel:U.map(O=>({...O,items_cents:F(Number(O.items_cents))})),
 by_terminal:H.map(O=>({...O,items_cents:F(Number(O.items_cents))})),payments:t?_:null,cash:bt,movements:Me,dre:Pn,external:me,control:{...I,canceled_cents:F(Number(I.canceled_cents)),
 discounts_cents:F(Number(I.discounts_cents)),launch_modes:Object.fromEntries(de.map(O=>[O.launch_mode,O.n])),events:Object.fromEntries(B.map(O=>[O.action,O.n]))},kitchen:oe,delivery:Z,
-stock:n?ne:null,customers:{...ot,loyalty:pt,reviews:Re}}}Nn.get("/overview",y("relatorios.visualizar"),p(async(e,a)=>{a.json(await _i(e.ctx,pi(e.query)))}));var qr={produtos:["by_p\
+stock:n?ne:null,customers:{...ot,loyalty:lt,reviews:Re}}}Nn.get("/overview",y("relatorios.visualizar"),p(async(e,a)=>{a.json(await _i(e.ctx,pi(e.query)))}));var qr={produtos:["by_p\
 roduct",[["name","Produto"],["category","Categoria"],["qty","Quantidade"],["items_cents","Vendido (R$)"],["cost_cents","CMV (R$)"],["abc","Curva ABC"]]],dias:["by_day",[["day","Dia\
  comercial"],["sessions","Consumos"],["items_cents","Vendido (R$)"]]],horas:["by_hour",[["hour","Hora"],["items","Itens"],["items_cents","Vendido (R$)"]]],garcons:["by_user",[["nam\
 e","Usu\xE1rio"],["items","Itens"],["items_cents","Vendido (R$)"]]],mesas:["by_table",[["number","Mesa"],["sessions","Consumos"],["items_cents","Vendido (R$)"],["avg_minutes","Perm\
@@ -3098,7 +3099,7 @@ exportado",{data:{section:e.query.section,...t}}),a.setHeader("content-type","te
 -${t.from}-${t.to}.csv"`),a.send(`\uFEFF${c.join(`
 `)}`)}));import{Router as Ar}from"npm:express@5.2.1";import{z as M}from"npm:zod@4.6.5";import Er from"node:crypto";var ht=e=>({enabled:!1,accepting:!0,delivery:!0,pickup:!0,fee_cents:0,min_order_cents:0,eta_minutes:45,hours:"",areas:"",payment_methods:["dinheiro","pix","cartao"],message:"",...e?.
 delivery||{}}),yi={recebido:["confirmado","cancelado"],confirmado:["em_preparo","pronto","cancelado"],em_preparo:["pronto","cancelado"],pronto:["saiu","entregue","cancelado"],saiu:[
-"entregue","cancelado"],entregue:[],cancelado:[]},lt={recebido:"Recebido",confirmado:"Confirmado",em_preparo:"Em preparo",pronto:"Pronto",saiu:"Saiu para entrega",entregue:"Entregu\
+"entregue","cancelado"],entregue:[],cancelado:[]},ut={recebido:"Recebido",confirmado:"Confirmado",em_preparo:"Em preparo",pronto:"Pronto",saiu:"Saiu para entrega",entregue:"Entregu\
 e",cancelado:"Cancelado"},Or=e=>({companyId:e,userId:null,unitId:null,terminalId:null,level:0,can:a=>["pdv.abrir_comanda","delivery.gerenciar"].includes(a)});async function fa(e,a,t,{
 channel:n="delivery"}={}){if(!Array.isArray(t)||!t.length)throw f("Carrinho vazio");let o=[...new Set(t.map(r=>Number(r.product_id)))],i=Object.fromEntries((await e.query("select *\
  from products where company_id = $1 and id = any($2)",[a,o])).rows.map(r=>[r.id,r])),s=[];for(let r of t){let c=i[Number(r.product_id)];if(!c||!c.active)throw b(`Produto indispon\xED\
@@ -3163,8 +3164,8 @@ a.status(n.replay?200:201).json(n)}));Ve.post("/orders/:id/status",p(async(e,a)=
 string().trim().max(200).optional(),proof:M.string().trim().max(200).optional(),eta_minutes:M.number().int().min(5).max(300).optional()}),e.body),n=await k(async o=>{let i=(await o.
 query("select * from delivery_orders where id = $1 and company_id = $2 for update",[Number(e.params.id),e.ctx.companyId])).rows[0];if(!i)throw v("Pedido n\xE3o encontrado");if(["sa\
 iu","entregue"].includes(t.to)&&!e.ctx.can("delivery.gerenciar")){if(Q(e.ctx,"delivery.entregar"),Number(i.courier_id)!==Number(e.ctx.userId))throw b("Pedido atribu\xEDdo a outro entr\
-egador")}else Q(e.ctx,"delivery.gerenciar");if(i.status===t.to)return{ok:!0,replay:!0};if(!yi[i.status].includes(t.to))throw b(`N\xE3o \xE9 poss\xEDvel ir de "${lt[i.status]}" para\
- "${lt[t.to]}"`,"invalid_transition");if(t.to==="saiu"&&i.mode!=="entrega")throw f("Pedido de retirada n\xE3o sai para entrega");if(t.to==="cancelado"&&!t.reason)throw f("Informe o\
+egador")}else Q(e.ctx,"delivery.gerenciar");if(i.status===t.to)return{ok:!0,replay:!0};if(!yi[i.status].includes(t.to))throw b(`N\xE3o \xE9 poss\xEDvel ir de "${ut[i.status]}" para\
+ "${ut[t.to]}"`,"invalid_transition");if(t.to==="saiu"&&i.mode!=="entrega")throw f("Pedido de retirada n\xE3o sai para entrega");if(t.to==="cancelado"&&!t.reason)throw f("Informe o\
  motivo do cancelamento");if(t.to==="confirmado"&&await o.query("update order_items set sent_at = now() where session_id = $1 and kitchen_status = 'novo' and sent_at is null and st\
 atus = 'ativo'",[i.session_id]),t.to==="cancelado"){if((await K(o,i.session_id)).paid>0)throw b("H\xE1 pagamento confirmado: estorne antes de cancelar","has_payments");let r=(await o.
 query("select id, kitchen_status from order_items where session_id = $1 and status = 'ativo'",[i.session_id])).rows;for(let c of r)["novo","aceito","nao_produz"].includes(c.kitchen_status)&&
@@ -3245,7 +3246,7 @@ ${N.slice(0,12).join(`
 
 `).slice(0,3500)||"Card\xE1pio indispon\xEDvel no momento.","Para pedir, digite *pedido*."],state:s}}if(we(r,"status","meu pedido","cade","acompanhar","demora")){let _=(await d("se\
 lect number, status, mode, eta_minutes, created_at from delivery_orders where company_id = $1 and phone = $2 order by id desc limit 1",[e.id,ke(a.contact)])).rows[0];return _?{replies:[
-`Pedido *#${_.number}*: *${lt[_.status]}*${["recebido","confirmado","em_preparo"].includes(_.status)&&_.eta_minutes?` \xB7 previs\xE3o de ${_.eta_minutes} min`:""}.`],state:s}:{replies:[
+`Pedido *#${_.number}*: *${ut[_.status]}*${["recebido","confirmado","em_preparo"].includes(_.status)&&_.eta_minutes?` \xB7 previs\xE3o de ${_.eta_minutes} min`:""}.`],state:s}:{replies:[
 "N\xE3o encontrei pedidos feitos por este n\xFAmero. Se pediu por outro n\xFAmero, fale com um *atendente*."],state:s}}if(we(r,"reserva","reservar","mesa para"))return we(r,"cancel\
 ar","cancela","desmarcar")?n?{replies:["\u2705 (Simula\xE7\xE3o) Reserva cancelada \u2014 nada foi alterado."],state:{step:null}}:{replies:[(await d(`update reservations set status\
  = 'cancelada' where id = (select id from reservations where company_id = $1 and phone = $2
@@ -3401,9 +3402,9 @@ status:o.status})}));Ce.get("/orders/:token",p(async(e,a)=>{if(!/^[A-Za-z0-9_-]{
 ber, d.status, d.mode, d.eta_minutes, d.created_at, d.updated_at, d.session_id, d.customer_name, c.name as company, c.slug, c.phone as company_phone
     from delivery_orders d join companies c on c.id = d.company_id where d.public_token = $1`,[e.params.token])).rows[0];if(!t)throw v("Pedido n\xE3o encontrado");let n=(await d("s\
 elect description, qty, modifiers, total_cents from order_items where session_id = $1 and status = 'ativo' order by id",[t.session_id])).rows,o=(await d("select status, created_at \
-from delivery_events where order_id = $1 order by id",[t.id])).rows,i=await K({query:d},t.session_id);a.set("cache-control","no-store"),a.json({number:t.number,status:t.status,label:lt[t.
+from delivery_events where order_id = $1 order by id",[t.id])).rows,i=await K({query:d},t.session_id);a.set("cache-control","no-store"),a.json({number:t.number,status:t.status,label:ut[t.
 status],mode:t.mode,eta_minutes:t.eta_minutes,created_at:t.created_at,first_name:t.customer_name.split(" ")[0],company:t.company,slug:t.slug,company_phone:t.company_phone||null,items:n,
-totals:{items:i.items,delivery_fee:i.deliveryFee,total:i.total},events:o.map(s=>({status:s.status,label:lt[s.status],at:s.created_at}))})}));Ce.get("/review/:token",p(async(e,a)=>{
+totals:{items:i.items,delivery_fee:i.deliveryFee,total:i.total},events:o.map(s=>({status:s.status,label:ut[s.status],at:s.created_at}))})}));Ce.get("/review/:token",p(async(e,a)=>{
 let t=wa(e.params.token);if(!t)throw v("Link inv\xE1lido");let n=(await d(`select s.id, s.company_id, c.name as company, (select 1 from reviews r where r.session_id = s.id) as done\
 
     from consumption_sessions s join companies c on c.id = s.company_id where s.id = $1 and s.status = 'encerrada'`,[t])).rows[0];if(!n)throw v("Link inv\xE1lido");a.json({company:n.

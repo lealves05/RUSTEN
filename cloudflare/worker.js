@@ -6,14 +6,17 @@
 //   EXTRA_PROXY     outros prefixos encaminhados à API além de /api      ex.: "/webhooks"
 //   CRON_PATH       rota chamada pelo agendamento (Cron Trigger), com Authorization: Bearer CRON_SECRET
 //   SESSION_COOKIES nomes dos cookies de sessão repassados (ex.: "__Host-rusten_rt"); os demais cookies nunca passam
+//   API_REGION      região onde a Edge Function roda (a mesma do banco), ex.: "sa-east-1"; sem ela a Supabase usa a mais próxima de quem chama
 // Segredos (wrangler secret put): EDGE_PROXY_KEY (repasse do IP real à API), CRON_SECRET (só no Master).
 // O destino é sempre API_UPSTREAM: nada que venha do navegador escolhe host, porta ou URL de destino.
 
 const HOP = ['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host'];
 // cabeçalhos de identidade/encaminhamento enviados pelo navegador nunca chegam à API como se fossem confiáveis
-const STRIP_REQ = /^(x-forwarded-|x-real-ip$|forwarded$|cf-|x-edge-|x-orbi-|x-vercel-|true-client-ip$|x-client-ip$|cookie$)/i;
+const STRIP_REQ = /^(x-forwarded-|x-real-ip$|forwarded$|cf-|x-edge-|x-orbi-|x-vercel-|x-region$|true-client-ip$|x-client-ip$|cookie$)/i;
 
 const list = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
+// x-region: a Edge Function roda na região do banco (cada consulta fica perto dele); só o próprio site escolhe a região
+const regionOf = (env) => (/^[a-z]{2}-[a-z]+-\d$/.test(String(env.API_REGION || '').trim()) ? String(env.API_REGION).trim() : '');
 const hasPrefix = (path, prefixes) => prefixes.some((p) => path === p.replace(/\/$/, '') || path.startsWith(p.endsWith('/') ? p : `${p}/`));
 
 function json(status, body, extra = {}) {
@@ -40,6 +43,7 @@ async function proxy(request, env, url) {
   if (!okBase) return json(500, { error: 'API não configurada neste endereço.' });
   if (path.includes('..') || path.includes('//')) return json(400, { error: 'Requisição inválida.' });
   const target = new URL(base + path + url.search);
+  target.searchParams.delete('forceFunctionRegion'); // a região é decidida aqui, não pelo navegador
 
   const headers = new Headers();
   for (const [k, v] of request.headers) {
@@ -59,6 +63,8 @@ async function proxy(request, env, url) {
     headers.set('x-edge-client-ip', ip);
   }
   headers.set('x-edge-site', url.host);
+  const region = regionOf(env);
+  if (region) headers.set('x-region', region);
 
   let upstream;
   try {
@@ -111,7 +117,7 @@ export default {
   async scheduled(_event, env, ctx) {
     if (!env.CRON_PATH || !env.CRON_SECRET) return;
     const base = String(env.API_UPSTREAM || '').replace(/\/$/, '');
-    ctx.waitUntil(fetch(`${base}${env.CRON_PATH}`, { headers: { Authorization: `Bearer ${env.CRON_SECRET}` } })
+    ctx.waitUntil(fetch(`${base}${env.CRON_PATH}`, { headers: { Authorization: `Bearer ${env.CRON_SECRET}`, ...(regionOf(env) ? { 'x-region': regionOf(env) } : {}) } })
       .then(async (r) => console.log(JSON.stringify({ cron: env.CRON_PATH, status: r.status })))
       .catch((e) => console.log(JSON.stringify({ cron: env.CRON_PATH, error: String(e?.message || e) }))));
   },

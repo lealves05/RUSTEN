@@ -100,8 +100,10 @@ async function startSession(user, req) {
 }
 
 // Hash fictício para tempo constante no login (calculado na primeira vez, não na inicialização)
-let DUMMY_HASH;
-const dummyHash = () => (DUMMY_HASH ||= bcrypt.hashSync('dummy-password-for-timing', 12));
+// hash fixo de um valor aleatório descartado (ninguém conhece a senha): mantém o tempo da comparação igual para
+// usuário inexistente sem gastar ~250 ms de CPU calculando bcrypt a cada início da Edge Function
+const DUMMY_HASH = '$2a$12$kp70/KMsn5mZQWce4FIpauwTPYTLviDGnA5qqL72pouglTQX4b2C2';
+const dummyHash = () => DUMMY_HASH;
 
 // Dados públicos do cadastro: planos da central, regra de teste e padrões da instalação
 router.get('/plans', h(async (_req, res) => {

@@ -17,6 +17,8 @@
   "vars": {
     "PRODUCT_ID": "rusten",
     "API_UPSTREAM": "https://dwfbxrfniarhufltmlhb.supabase.co/functions/v1/rusten-api-cf",
+    // a API roda na região do banco de dados (evita ida e volta entre continentes a cada consulta)
+    "API_REGION": "sa-east-1",
     // F05: cookie HttpOnly da renovação da sessão (só ele é repassado entre o site e a API)
     "SESSION_COOKIES": "__Host-rusten_rt"
   },

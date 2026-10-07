@@ -91,6 +91,23 @@ platformRouter.post('/tenants/:id/owner-reset', h(async (req, res) => {
     message: 'Senha provisória criada. Oriente o responsável a trocá-la em Configurações › Meu acesso logo no primeiro acesso.' });
 }));
 
+/**
+ * A central exclui a empresa (pedido do MASTER, já confirmado lá com o nome digitado e o motivo):
+ * apaga a empresa e tudo o que pertence a ela (usuários, cardápio, comandas, caixa, estoque, histórico). Não pode ser desfeito.
+ */
+platformRouter.post('/tenants/:id/delete', h(async (req, res) => {
+  const c = await company(req.params.id);
+  parse(z.object({ confirm: z.literal(true), reason: z.string().max(500).nullable().optional() }), req.body || {});
+  const removed = await tx(async (db) => {
+    const { rows: [locked] } = await db.query('select id from companies where id = $1 for update', [c.id]);
+    if (!locked) throw notFound('Empresa não encontrada.');
+    const { rows: [n] } = await db.query('select count(*)::int as usuarios from users where company_id = $1', [c.id]);
+    const { rows: [p] } = await db.query('select purge_company($1) as tabelas', [c.id]);
+    return { ...n, tabelas: p.tabelas };
+  });
+  res.json({ ok: true, removed });
+}));
+
 // ---- Parâmetros (contrato v1.1): sistema e empresa ----
 platformRouter.get('/settings', h(async (_req, res) => res.json({ values: await getSystemParams() })));
 platformRouter.put('/settings', h(async (req, res) => {

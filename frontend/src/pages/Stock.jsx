@@ -15,17 +15,19 @@ const MOV = { entrada: 'Entrada', venda: 'Venda', estorno_venda: 'Estorno de ven
 const TABS = [['nota', 'Lançar nota'], ['insumos', 'Insumos'], ['fichas', 'Fichas técnicas'], ['compras', 'Compras'], ['inventario', 'Inventário'], ['correcoes', 'Correções']];
 
 export default function Stock() {
+  const s = useSession();
   const [tab, setTab] = useState('insumos');
+  const tabs = TABS.filter(([k]) => k !== 'nota' || s.hasModule('notas_entrada')); // leitura de NF-e é módulo do plano
   const items = useLoad(() => api('/api/stock/items'), []);
   return (
     <div>
       <PageHeader title="Estoque" subtitle="Vendas baixam os insumos da ficha técnica no lançamento; cancelamento antes do preparo devolve. Movimentos nunca são editados." />
       <div className="mb-4 flex gap-1 overflow-x-auto border-b border-line" role="tablist">
-        {TABS.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+        {tabs.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
           className={`whitespace-nowrap border-b-2 px-4 py-2 text-sm font-semibold uppercase tracking-wide ${tab === k ? 'border-copper text-copper' : 'border-transparent text-muted hover:text-ink'}`}>{l}</button>)}
       </div>
       {items.error && <ErrorBox error={items.error} onRetry={items.reload} />}
-      {tab === 'nota' && <NoteImport stock={items.data || []} onDone={() => { items.reload(); setTab('insumos'); }} />}
+      {tab === 'nota' && s.hasModule('notas_entrada') && <NoteImport stock={items.data || []} onDone={() => { items.reload(); setTab('insumos'); }} />}
       {tab === 'insumos' && <Items items={items} />}
       {tab === 'correcoes' && <Corrections stock={items.data || []} onChanged={items.reload} goItems={() => setTab('insumos')} />}
       {tab === 'fichas' && <Recipes stock={items.data || []} />}

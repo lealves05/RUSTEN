@@ -453,6 +453,16 @@ await check('módulo fora do plano: 403', async () => {
   assert.equal(r.status, 403); assert.equal(r.data.code, 'module_disabled');
   await setAccess(A.me.company.id, hub.access('ACTIVE'));
 });
+await check('módulos novos do plano: reservas, avaliações, notas e planilhas bloqueiam só a própria rota', async () => {
+  await setAccess(A.me.company.id, hub.access('ACTIVE', { features: { reservas: false, avaliacoes: false, notas_entrada: false, importacao_planilhas: false } }));
+  for (const path of ['/api/reservations', '/api/marketing/reviews', '/api/stock/notes', '/api/menu/export']) {
+    const r = await api('GET', path);
+    assert.equal(r.status, 403, path); assert.equal(r.data.code, 'module_disabled', path);
+  }
+  assert.equal((await api('GET', '/api/pdv/sessions')).status, 200, 'núcleo continua liberado');
+  await setAccess(A.me.company.id, hub.access('ACTIVE'));
+  assert.notEqual((await api('GET', '/api/marketing/reviews')).status, 403, 'chave ausente no plano = liberado');
+});
 await check('situação antiga é revalidada na central', async () => {
   hub.tenants.set(String(A.me.company.id), hub.access('ACTIVE', { plan: { id: 'p1', name: 'Bar Pro' } }));
   await pool.query("update companies set access_updated_at = now() - interval '10 minutes' where id = $1", [A.me.company.id]);

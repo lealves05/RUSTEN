@@ -72,16 +72,16 @@ export function createApp() {
   app.use('/api/pdv', ...gated, requireAccess('pdv'), pdvRouter);
   app.use('/api/cash', ...gated, requireAccess('pdv'), cashRouter);
   app.use('/api/customers', ...gated, requireAccess('clientes'), customersRouter);
-  app.use('/api/accounts', ...gated, requireAccess('clientes'), accountRouter);
-  app.use('/api/infinitepay', ...gated, infinitepayRouter);
-  app.use('/api/pos-sales', ...gated, requireAccess('pdv'), posSalesRouter);
+  app.use('/api/accounts', ...gated, requireAccess('conta_cliente'), accountRouter);
+  app.use('/api/infinitepay', ...gated, requireAccess('infinitepay'), infinitepayRouter);
+  app.use('/api/pos-sales', ...gated, requireAccess('infinitepay'), posSalesRouter);
   app.use('/api/kitchen', ...gated, requireAccess('cozinha'), kitchenRouter);
   app.use('/api/stock', ...gated, requireAccess('estoque'), stockRouter);
   app.use('/api/reports', ...gated, requireAccess('relatorios'), reportsRouter);
   app.use('/api/delivery', ...gated, requireAccess('delivery'), deliveryRouter);
   app.use('/api/marketing', ...gated, requireAccess('marketing'), marketingRouter);
   app.use('/api/agent', ...gated, requireAccess('agente'), agentRouter);
-  app.use('/api/reservations', ...gated, requireAccess('salao'), reservationsRouter);
+  app.use('/api/reservations', ...gated, requireAccess('reservas'), reservationsRouter);
 
   app.use('/api', (_req, _res, next) => next(new HttpError(404, 'Rota não encontrada', 'not_found')));
 

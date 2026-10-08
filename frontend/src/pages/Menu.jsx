@@ -14,6 +14,7 @@ const KINDS = { resale: 'Revenda', recipe: 'Preparado (receita)', produced: 'Pro
 
 export default function Menu() {
   const s = useSession();
+  const sheets = s.hasModule('importacao_planilhas');
   const [params] = useSearchParams();
   const [q, setQ] = useState('');
   const [cat, setCat] = useState('');
@@ -45,12 +46,12 @@ export default function Menu() {
   return (
     <div>
       <PageHeader title="Cardápio" subtitle="Preços, códigos de leitura e opções valem igualmente em todos os modos do PDV"
-        actions={manage && <><button className="btn-ghost" onClick={() => setImporting(true)}><Upload size={16} /> Importar</button><button className="btn-ghost" onClick={exportMenu} disabled={exporting}><Download size={16} /> {exporting ? 'Gerando…' : 'Exportar'}</button><button className="btn-ghost" onClick={() => setCatModal(true)}>Categorias</button><button className="btn-primary" onClick={() => setEdit({})}><Plus size={16} /> Novo produto</button></>} />
+        actions={manage && <>{sheets && <><button className="btn-ghost" onClick={() => setImporting(true)}><Upload size={16} /> Importar</button><button className="btn-ghost" onClick={exportMenu} disabled={exporting}><Download size={16} /> {exporting ? 'Gerando…' : 'Exportar'}</button></>}<button className="btn-ghost" onClick={() => setCatModal(true)}>Categorias</button><button className="btn-primary" onClick={() => setEdit({})}><Plus size={16} /> Novo produto</button></>} />
       <div className="mb-3 flex flex-wrap gap-2">
         <input className="input max-w-xs" placeholder="Buscar por nome, SKU ou código" value={q} onChange={(e) => setQ(e.target.value)} />
         <select className="input max-w-[220px]" value={cat} onChange={(e) => setCat(e.target.value)}><option value="">Todas as categorias</option>{cats.data.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
       </div>
-      {!list.length ? <Empty icon={BookOpen} title="Nenhum produto">{products.data.length ? 'Nada encontrado com esse filtro.' : <>Cadastre o primeiro produto do cardápio{manage && <> ou <button className="underline" onClick={() => setImporting(true)}>importe uma planilha de produtos</button></>}.</>}</Empty> : (
+      {!list.length ? <Empty icon={BookOpen} title="Nenhum produto">{products.data.length ? 'Nada encontrado com esse filtro.' : <>Cadastre o primeiro produto do cardápio{manage && sheets && <> ou <button className="underline" onClick={() => setImporting(true)}>importe uma planilha de produtos</button></>}.</>}</Empty> : (
         <div className="card overflow-x-auto">
           <table className="table-clean">
             <thead><tr><th>Produto</th><th>Categoria</th><th>Tipo</th><th className="text-right">Preço</th>{list[0]?.cost_cents !== undefined && <th className="text-right">Custo</th>}<th>Códigos</th><th>Situação</th></tr></thead>

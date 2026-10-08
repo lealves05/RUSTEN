@@ -145,7 +145,7 @@ export function BrandSettings({ value, onChange, manage, companyName, onError })
         </div>
       </section>
 
-      <section className="space-y-3">
+      {s.hasModule('painel_tv') && <section className="space-y-3">
         <h3 className="font-display text-2xl">Painel da TV</h3>
         <div className="grid gap-4 lg:grid-cols-2">
           <ImagePicker kind="tv_fundo" tall title="Fundo do Painel da TV" hint="Use no Painel da TV com o fundo “Imagem da empresa”." manage={manage} onError={onError} />
@@ -154,7 +154,7 @@ export function BrandSettings({ value, onChange, manage, companyName, onError })
             <Link to="/painel-tv" className="btn-ghost inline-flex"><MonitorPlay size={16} /> Abrir o Painel da TV</Link>
           </div>
         </div>
-      </section>
+      </section>}
 
       <section className="space-y-2">
         <h3 className="font-display text-2xl">Prévia</h3>

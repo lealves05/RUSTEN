@@ -38,7 +38,7 @@ export default function Settings() {
             <Route path="usuarios" element={<Users />} />
             <Route path="perfis" element={<Roles />} />
             <Route path="unidades" element={<Units />} />
-            <Route path="integracoes" element={<div className="space-y-6"><InfinitePaySettings /><NoteIntegrations /></div>} />
+            <Route path="integracoes" element={<div className="space-y-6">{s.hasModule('infinitepay') && <InfinitePaySettings />}{s.hasModule('notas_entrada') && <NoteIntegrations />}</div>} />
             <Route path="assinatura" element={<Subscription />} />
             <Route path="auditoria" element={<Audit />} />
           </Routes>

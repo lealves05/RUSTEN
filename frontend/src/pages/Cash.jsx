@@ -35,7 +35,7 @@ export default function Cash() {
   return (
     <div>
       <PageHeader title="Caixa" subtitle="Caixa deste terminal. Consumo lançado não é recebimento: só pagamentos confirmados entram no caixa."
-        actions={s.can('financeiro.visualizar') && <><a className="btn-ghost" href="/financeiro/maquininha" data-pos-link>Vendas da maquininha</a><a className="btn-ghost" href="/financeiro/infinitepay" data-ip-link>Cobranças InfinitePay</a></>} />
+        actions={s.can('financeiro.visualizar') && s.hasModule('infinitepay') && <><a className="btn-ghost" href="/financeiro/maquininha" data-pos-link>Vendas da maquininha</a><a className="btn-ghost" href="/financeiro/infinitepay" data-ip-link>Cobranças InfinitePay</a></>} />
       {result && (
         <div className="card mb-4 p-4">
           <h2 className="font-display text-2xl">Caixa fechado</h2>

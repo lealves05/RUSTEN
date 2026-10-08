@@ -30,8 +30,8 @@ export default function Customers() {
       <PageHeader title="Clientes" subtitle="Cadastro, histórico, fidelidade e consentimentos. O CPF identifica o cliente ao abrir a comanda."
         actions={<>
           {manage && <button className="btn-primary" onClick={() => setEdit({})}><Plus size={16} /> Novo cliente</button>}
-          {manage && s.can('dados.pessoais') && <button className="btn-ghost" onClick={() => setModal('import')}><Upload size={16} /> Importar</button>}
-          {manage && <button className="btn-ghost" onClick={() => download('/api/customers/export/csv', 'clientes.csv').catch((e) => toast(e.message, 'bad'))}><Download size={16} /> Exportar</button>}
+          {manage && s.can('dados.pessoais') && s.hasModule('importacao_planilhas') && <button className="btn-ghost" onClick={() => setModal('import')}><Upload size={16} /> Importar</button>}
+          {manage && s.hasModule('importacao_planilhas') && <button className="btn-ghost" onClick={() => download('/api/customers/export/csv', 'clientes.csv').catch((e) => toast(e.message, 'bad'))}><Download size={16} /> Exportar</button>}
           {manage && s.can('configuracoes.gerenciar') && <button className="btn-ghost" onClick={() => setModal('loyalty')}><Gift size={16} /> Fidelidade</button>}
           <button className="btn-ghost" onClick={() => setModal('accounts')} data-open-accounts><NotebookPen size={16} /> Fiado e créditos</button>
         </>} />
@@ -168,9 +168,9 @@ function CustomerView({ id, onClose, onEdit, onChanged }) {
             {c.preferences && <div className="sm:col-span-2">Preferências: {c.preferences}</div>}
             <div className="sm:col-span-2">Contato: {c.unsubscribed ? 'descadastrado de campanhas' : [c.consent_whatsapp && 'WhatsApp', c.consent_email && 'e-mail'].filter(Boolean).join(' e ') || 'sem consentimento'}</div>
           </div>
-          <section><h3 className="font-display text-xl">Conta: crédito e fiado</h3>
+          {s.hasModule('conta_cliente') && <section><h3 className="font-display text-xl">Conta: crédito e fiado</h3>
             <AccountPanel customerId={id} customerName={c.name} onChanged={onChanged} />
-          </section>
+          </section>}
           <section><h3 className="font-display text-xl">Histórico de consumo</h3>
             {!d.data.history.length ? <p className="text-sm text-muted">Sem consumos identificados.</p> : (
               <table className="table-clean"><tbody>{d.data.history.map((h) => (

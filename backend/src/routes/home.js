@@ -36,7 +36,7 @@ router.get('/dashboard', h(async (req, res) => {
       where s.company_id = $1 and s.business_date = $2 and i.status = 'ativo' group by 1 order by 2 desc limit 5`, [c.companyId, day])).rows;
   if (!money) { delete r.consumed_cents; delete r.received_cents; delete r.fiado_cents; delete r.cash_differences; }
   res.json({ business_date: day, ...r, by_hour: byHour, top, access: c.access,
-    pending_modules: ['delivery', 'estoque', 'cozinha', 'clientes', 'marketing', 'agente', 'fiscal', 'relatorios'] });
+    pending_modules: [] });
 }));
 
 router.get('/search', h(async (req, res) => {

@@ -71,19 +71,38 @@ export const DEFAULT_ROLES = [
 
 // Módulos controláveis pela central (plano/empresa). Histórico continua acessível a perfis autorizados.
 export const MODULES = {
-  pdv: 'PDV e comandas',
-  salao: 'Salão, mesas e reservas',
+  pdv: 'PDV, comandas e caixa',
+  salao: 'Salão e mesas',
   cozinha: 'Cozinha, bar e KDS',
   delivery: 'Delivery e cardápio digital',
   cardapio: 'Cardápio',
   estoque: 'Estoque, compras e fichas técnicas',
   clientes: 'Clientes e fidelidade',
-  financeiro: 'Caixa e financeiro',
   relatorios: 'Relatórios',
   marketing: 'Marketing',
   agente: 'Agente WhatsApp',
-  fiscal: 'Fiscal',
-  infinitepay: 'Importação e conciliação InfinitePay',
+  infinitepay: 'Maquininha InfinitePay: cobrança, importação e conciliação de vendas',
+  // recursos que existiam dentro de outros módulos e agora podem entrar ou sair dos planos separadamente
+  reservas: 'Reservas de mesas',
+  conta_cliente: 'Conta do cliente (crédito antecipado e acerto de fiado)',
+  avaliacoes: 'Avaliações dos clientes',
+  notas_entrada: 'Leitura de notas fiscais de compra (NF-e)',
+  importacao_planilhas: 'Importação e exportação por planilha (cardápio e clientes)',
+  painel_tv: 'Painel da TV (pedidos prontos)',
+};
+// "financeiro" e "fiscal" saíram do catálogo: o caixa faz parte do PDV e não há emissão fiscal no RUSTEN ainda
+// (vender um módulo que não liga nada confundiria o plano).
+
+/**
+ * Rotas que pertencem a um módulo diferente do módulo do prefixo (vale a regra mais específica).
+ * Ex.: /api/menu é "Cardápio", mas /api/menu/import é "Importação por planilha".
+ */
+export const MODULE_ROUTES = {
+  importacao_planilhas: ['POST /menu/import', '/menu/export', 'POST /customers/import', '/customers/export'],
+  infinitepay: ['/menu/import/infinitepay'],
+  avaliacoes: ['/marketing/reviews', '/marketing/review-link'],
+  notas_entrada: ['/stock/notes'],
+  painel_tv: ['/brand/tv'],
 };
 
 // Configuração padrão do motor de leitura (empresa → unidade → terminal)

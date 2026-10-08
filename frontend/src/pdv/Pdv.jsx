@@ -453,7 +453,7 @@ export default function Pdv() {
           if (closed) {
             const done = active; setActiveId(null); setActive(null);
             // QR de avaliação: automático só se este aparelho quiser; senão fica a um toque no aviso
-            const wantReview = s.hasModule('marketing') && done;
+            const wantReview = s.hasModule('avaliacoes') && done;
             const auto = wantReview && reviewAuto.get();
             const toFloor = done && ['mesa', 'comanda'].includes(done.kind) && s.can('salao.visualizar');
             const aba = done?.kind === 'mesa' ? 'mesas' : 'comandas';

@@ -3,7 +3,8 @@ import crypto from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import jwt from 'jsonwebtoken';
 import { q, HttpError, forbidden } from './core.js';
-import { MODULES } from './catalog.js';
+import { MODULES, MODULE_ROUTES } from './catalog.js';
+import { compileModuleRules, moduleForRoute } from './moduleRules.js';
 import { env } from './env.js';
 import { refreshAccess } from './platform.js';
 
@@ -154,10 +155,16 @@ export function computeAccess(access, updatedAt, { demo = false } = {}) {
 }
 
 // Portão da assinatura: bloqueada → 402 (só rotas de regularização); módulo fora do plano → 403
+const SUB_RULES = compileModuleRules(Object.fromEntries(Object.entries(MODULE_ROUTES).map(([k, routes]) => [k, { routes }])));
 export const requireAccess = (module) => (req, _res, next) => {
   const acc = req.ctx.access;
   if (!acc.allowed) return next(new HttpError(402, acc.reason, 'access_blocked', { state: acc.state }));
   if (module && !acc.modules.includes(module)) return next(forbidden('Módulo não incluído no plano', 'module_disabled'));
+  // recurso de outro módulo dentro deste prefixo (ex.: importação por planilha dentro do cardápio)
+  if (!module) {
+    const sub = moduleForRoute(SUB_RULES, req.method, `${req.baseUrl || ''}${req.path || ''}`.replace(/^.*?\/api(?=\/)/, '') /* sem o prefixo da Edge Function e do /api */);
+    if (sub && !acc.modules.includes(sub)) return next(forbidden(`Módulo não incluído no plano: ${MODULES[sub]}`, 'module_disabled'));
+  }
   next();
 };
 

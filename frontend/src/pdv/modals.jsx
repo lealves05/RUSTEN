@@ -128,7 +128,7 @@ export function PaymentModal({ open, session, onClose, onChanged }) {
   const [pending, setPending] = useState(null); // operação com resposta incerta
   const [settle, setSettle] = useState(false);
   const [ip, setIp] = useState(null);
-  useEffect(() => { if (open && s.can('pdv.receber')) api('/api/infinitepay/settings').then(setIp).catch(() => setIp(null)); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (open && s.can('pdv.receber') && s.hasModule('infinitepay')) api('/api/infinitepay/settings').then(setIp).catch(() => setIp(null)); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
   const t = session?.totals;
   const acc = session?.account;
   useEffect(() => { if (open && t) { setAmount(centsToInput(Math.max(t.balance, 0))); setTendered(''); setErr(null); setSplit(null); setPicked([]); } }, [open, t?.balance]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -137,7 +137,7 @@ export function PaymentModal({ open, session, onClose, onChanged }) {
   const amountC = parseCents(amount);
   const tenderedC = parseCents(tendered);
   const change = method === 'dinheiro' && tenderedC && amountC ? tenderedC - amountC : 0;
-  const methods = [...METHODS, ...(acc?.credit_cents > 0 ? [['saldo_cliente', 'Crédito do cliente', PiggyBank]] : []), ...(ip?.enabled ? [['infinitepay', 'InfinitePay (link/QR)', Zap]] : [])];
+  const methods = [...METHODS, ...(acc?.credit_cents > 0 && s.hasModule('conta_cliente') ? [['saldo_cliente', 'Crédito do cliente', PiggyBank]] : []), ...(ip?.enabled ? [['infinitepay', 'InfinitePay (link/QR)', Zap]] : [])];
   const noCustomer = !session.customer_id;
   const fiadoAfter = acc ? acc.balance_cents - (amountC || 0) : null;
   const fiadoOver = method === 'fiado' && acc && -fiadoAfter > acc.fiado_limit_cents;
